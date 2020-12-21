@@ -73,12 +73,12 @@ lama::Pose2D& lama::Pose2D::operator=(const lama::Pose2D& other)
     return *this;
 }
 
-lama::Pose2D lama::Pose2D::operator+(const lama::Pose2D& other)
+lama::Pose2D lama::Pose2D::operator+(const lama::Pose2D& other) const
 {
     return Pose2D(state * other.state);
 }
 
-lama::Pose2D lama::Pose2D::operator-(const lama::Pose2D& other)
+lama::Pose2D lama::Pose2D::operator-(const lama::Pose2D& other) const
 {
     return Pose2D(state.inverse() * other.state);
 }
@@ -95,7 +95,7 @@ lama::Pose2D& lama::Pose2D::operator-=(const lama::Pose2D& other)
     return *this;
 }
 
-lama::Vector2d lama::Pose2D::operator*(const Vector2d& point)
+lama::Vector2d lama::Pose2D::operator*(const Vector2d& point) const
 {
     return state*point;
 }

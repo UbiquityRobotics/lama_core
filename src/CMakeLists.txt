@@ -49,6 +49,7 @@ set(lama_SOURCES
     loc2d.cpp
     slam2d.cpp
     pf_slam2d.cpp
+    landmark_pf_slam2d.cpp
 )
 
 add_library(${PROJECT_NAME} ${lama_SOURCES})
