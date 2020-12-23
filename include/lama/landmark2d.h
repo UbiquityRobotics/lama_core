@@ -109,7 +109,9 @@ struct Landmark2D {
                 -delta.y() / (range*range), delta.x() / (range*range), 0,
                                          0,                         0, 1;
         } else {
-            h = mu;
+            h.head<2>() =  pose.state.inverse() *  mu.head<2>();
+            h(2) = normalize_angle(mu(2) - pose.rotation());
+
             J = Matrix3d::Identity();
         }// end if
     }
