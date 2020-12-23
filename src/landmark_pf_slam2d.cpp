@@ -83,7 +83,7 @@ bool lama::LandmarkPFSlam2D::update(const DynamicArray<Landmark2D>& landmarks, c
 
     if (not has_first_odom_){
         has_first_odom_ = true;
-        return false;
+        return true;
     }
 
     const uint32_t num_particles = options_.particles;
