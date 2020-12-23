@@ -55,10 +55,12 @@ struct Landmark2D {
 
     // Each landmark should have a unique ID.
     uint32_t id;
+
     // The landmark measurement.
-    Vector2d mu;
+    // It has 3 dof: x, y, rotation
+    Vector3d mu;
     // The measument covariance.
-    Matrix2d sigma;
+    Matrix3d sigma;
 
     // By default, we assume the the measurement is based on polar coordinates.
     // If false, then measument in cartesian coordinates are assumed.
@@ -66,41 +68,49 @@ struct Landmark2D {
     bool is_polar = true;
 
     // Given a pose, calculate the cartesian coordinates of the landmark.
-    inline Vector2d toCartesian(const Pose2D& pose) const
+    inline Vector3d toCartesian(const Pose2D& pose) const
     {
-        if (not is_polar)
-            return pose * mu;
+        Vector3d h;
 
-        Vector2d h;
-        h << pose.x() + mu(0) * std::cos(pose.rotation() + mu(1)),
-             pose.y() + mu(0) * std::sin(pose.rotation() + mu(1));
+        if (not is_polar){
+            h.head<2>() = pose * mu.head<2>();
+        } else {
+            h << pose.x() + mu(0) * std::cos(pose.rotation() + mu(1)),
+                 pose.y() + mu(0) * std::sin(pose.rotation() + mu(1));
+        }
+
+        h(2) = normalize_angle(mu(2) + pose.rotation());
 
         return h;
     }
 
     // Calculated the difference between two landmark measurements.
-    inline Vector2d diff(const Vector2d& other) const
+    inline Vector3d diff(const Vector3d& other) const
     {
-        Vector2d h = mu - other;
+        Vector3d h = mu - other;
         if (is_polar)
             h(1) = normalize_angle(h(1));
+
+        h(2) = normalize_angle(h(2));
 
         return h;
     }
 
-    inline void predict(const Pose2D& pose, const Vector2d& coords, Vector2d& h, Matrix2d& J) const
+    inline void predict(const Pose2D& pose, const Vector3d& mu, Vector3d& h, Matrix3d& J) const
     {
         if (is_polar){
-            Vector2d delta = coords - pose.xy();
+            Vector2d delta = mu.head<2>() - pose.xy();
             double range   = delta.norm();
             double bearing = normalize_angle(std::atan2(delta.y(), delta.x()) - pose.rotation());
 
-            h << range, bearing;
-            J << delta.x() / range        , delta.y() / range,
-                -delta.y() / (range*range), delta.x() / (range*range);
+            h << range, bearing, normalize_angle(mu(2) - pose.rotation());
+
+            J << delta.x() / range        , delta.y() / range,         0
+                -delta.y() / (range*range), delta.x() / (range*range), 0,
+                                         0,                         0, 1;
         } else {
-            h = coords;
-            J = Matrix2d::Identity();
+            h = mu;
+            J = Matrix3d::Identity();
         }// end if
     }
 };

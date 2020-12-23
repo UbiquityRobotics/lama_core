@@ -66,6 +66,8 @@ lama::LandmarkPFSlam2D::LandmarkPFSlam2D(const Options& options)
 
     for (auto& p : particles_[0])
         p.weight = 1.0 / num_particles;
+
+    has_first_odom_ = false;
 }
 
 lama::LandmarkPFSlam2D::~LandmarkPFSlam2D()
@@ -79,6 +81,11 @@ bool lama::LandmarkPFSlam2D::update(const DynamicArray<Landmark2D>& landmarks, c
     Pose2D odelta = odom_ - odometry;
     odom_ = odometry;
 
+    if (not has_first_odom_){
+        has_first_odom_ = true;
+        return false;
+    }
+
     const uint32_t num_particles = options_.particles;
     for (uint32_t i = 0; i < num_particles; ++i)
         drawFromMotion(odelta, particles_[current_particle_set_][i].pose, particles_[current_particle_set_][i].pose);
@@ -87,7 +94,11 @@ bool lama::LandmarkPFSlam2D::update(const DynamicArray<Landmark2D>& landmarks, c
     acc_trans_ += odelta.xy().norm();
     acc_rot_   += std::fabs(odelta.rotation());
     if (acc_trans_ <= options_.trans_thresh &&
-        acc_rot_ <= options_.rot_thresh)
+            acc_rot_ <= options_.rot_thresh)
+        return false;
+
+    // do we have landmarks?
+    if (landmarks.size() == 0)
         return false;
 
     acc_trans_ = 0;
@@ -97,8 +108,8 @@ bool lama::LandmarkPFSlam2D::update(const DynamicArray<Landmark2D>& landmarks, c
 
         for (uint32_t i = 0; i < num_particles; ++i)
             thread_pool_->enqueue([this, i, &landmarks](){
-                updateParticleLandmarks(&particles_[current_particle_set_][i], landmarks);
-            });
+                    updateParticleLandmarks(&particles_[current_particle_set_][i], landmarks);
+                    });
 
         thread_pool_->wait();
 
@@ -192,10 +203,10 @@ void lama::LandmarkPFSlam2D::updateParticleLandmarks(Particle* particle, const D
             new_lm.mu = landmark.toCartesian(particle->pose);
 
             // Calculate covariance
-            Vector2d h; Matrix2d H;
+            Vector3d h; Matrix3d H;
             landmark.predict(particle->pose, new_lm.mu, h, H);
 
-            Matrix2d Hi = H.inverse();
+            Matrix3d Hi = H.inverse();
             new_lm.sigma = Hi * landmark.sigma * Hi.transpose();
 
             // add the landmarks to the map
@@ -203,17 +214,17 @@ void lama::LandmarkPFSlam2D::updateParticleLandmarks(Particle* particle, const D
         } else {
 
             // Predicted landmark
-            Vector2d h; Matrix2d H;
+            Vector3d h; Matrix3d H;
             landmark.predict(particle->pose, map_lm->second.mu, h, H);
 
-            Matrix2d sig = map_lm->second.sigma;
-            Matrix2d Q = H * sig * H.transpose() + landmark.sigma;
+            Matrix3d sig = map_lm->second.sigma;
+            Matrix3d Q = H * sig * H.transpose() + landmark.sigma;
 
             // Kalman gain
-            Matrix2d K = sig * H.transpose() * Q.inverse();
+            Matrix3d K = sig * H.transpose() * Q.inverse();
 
             // inovation
-            Vector2d diff = landmark.diff(h);
+            Vector3d diff = landmark.diff(h);
 
             map_lm->second.mu = map_lm->second.mu + K * diff;
             map_lm->second.sigma = map_lm->second.sigma - K * H * sig;

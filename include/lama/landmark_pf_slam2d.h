@@ -50,8 +50,8 @@ public:
     struct MapLandmark {
         EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
 
-        Vector2d mu;
-        Matrix2d sigma;
+        Vector3d mu;
+        Matrix3d sigma;
     };
 
     struct Particle {
@@ -143,6 +143,7 @@ private:
     uint8_t current_particle_set_;
 
     Pose2D odom_;
+    bool has_first_odom_;
 
     double acc_trans_;
     double acc_rot_;
