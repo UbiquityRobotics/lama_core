@@ -67,6 +67,7 @@ lama::LandmarkPFSlam2D::LandmarkPFSlam2D(const Options& options)
     for (auto& p : particles_[0])
         p.weight = 1.0 / num_particles;
 
+    neff_ = num_particles;
     has_first_odom_ = false;
 }
 
@@ -105,7 +106,6 @@ bool lama::LandmarkPFSlam2D::update(const DynamicArray<Landmark2D>& landmarks, c
     acc_rot_   = 0;
 
     if (thread_pool_){
-
         for (uint32_t i = 0; i < num_particles; ++i)
             thread_pool_->enqueue([this, i, &landmarks](){
                     updateParticleLandmarks(&particles_[current_particle_set_][i], landmarks);
@@ -213,22 +213,36 @@ void lama::LandmarkPFSlam2D::updateParticleLandmarks(Particle* particle, const D
             particle->landmarks[id] = new_lm;
         } else {
 
+            // abbreviation
+            Matrix3d& sig = map_lm->second.sigma;
+
             // Predicted landmark
             Vector3d h; Matrix3d H;
             landmark.predict(particle->pose, map_lm->second.mu, h, H);
 
-            Matrix3d sig = map_lm->second.sigma;
-            Matrix3d Q = H * sig * H.transpose() + landmark.sigma;
-
-            // Kalman gain
-            Matrix3d K = sig * H.transpose() * Q.inverse();
-
             // inovation
             Vector3d diff = landmark.diff(h);
 
-            map_lm->second.mu = map_lm->second.mu + K * diff;
-            map_lm->second.sigma = map_lm->second.sigma - K * H * sig;
+            // Compatibility test with the Mahalanobis distance.
+            bool is_compatible = true;
+            if (options_.do_compatibility_test){
+                double d2 = diff.dot(sig.inverse() * diff); // squared Mahalanobis distance
+                constexpr double nsigma  = 11.34 * 11.34;   // 3dof sigma
+                if ( d2 > nsigma ){
+                    is_compatible = false; // do not update
+                }
+            }//end if compatibility test
 
+            // Kalman gain
+            Matrix3d Q = H * sig * H.transpose() + landmark.sigma;
+            Matrix3d K = sig * H.transpose() * Q.inverse();
+
+            // Update landmark state
+            map_lm->second.sigma = map_lm->second.sigma - K * H * sig;
+            if (is_compatible)
+                map_lm->second.mu = map_lm->second.mu + K * diff;
+
+            // Calculate weight
             double w = -0.5 * diff.transpose() * Q.inverse() * diff - std::log(std::sqrt(2.0 * M_PI * Q.determinant()));
             particle->weight += w;
             particle->weight_sum += w;

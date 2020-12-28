@@ -104,6 +104,8 @@ public:
         /// Pseudo random generator seed.
         /// Use 0 to generate a new seed.
         uint32_t seed = 0;
+        /// Do compatibility test* using the Mahalanobis distance.
+        bool do_compatibility_test = true;
     };
 
     LandmarkPFSlam2D(const Options& options = Options());
@@ -147,10 +149,6 @@ private:
 
     double acc_trans_;
     double acc_rot_;
-
-    double truncated_ray_;
-    double truncated_range_;
-    double max_weight_;
     double neff_;
 
     ThreadPool* thread_pool_;
