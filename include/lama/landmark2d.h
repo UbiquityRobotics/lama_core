@@ -108,11 +108,22 @@ struct Landmark2D {
             J << delta.x() / range        , delta.y() / range,         0
                 -delta.y() / (range*range), delta.x() / (range*range), 0,
                                          0,                         0, 1;
-        } else {
-            h.head<2>() =  pose.state.inverse() *  mu.head<2>();
-            h(2) = normalize_angle(mu(2) - pose.rotation());
 
-            J = Matrix3d::Identity();
+        } else {
+            double cs = std::cos(pose.rotation());
+            double sn = std::sin(pose.rotation());
+
+            Vector2d delta = mu.head<2>() - pose.xy();
+
+            /* h.head<2>() =  pose.state.inverse() *  mu.head<2>(); */
+
+            h << delta.x() * cs + delta.y() * sn,
+                 delta.y() * cs - delta.x() * sn,
+                 normalize_angle(mu(2) - pose.rotation());
+
+            J << cs,  sn,  0,
+                -sn,  cs,  0,
+                  0,   0,  1;
         }// end if
     }
 };
