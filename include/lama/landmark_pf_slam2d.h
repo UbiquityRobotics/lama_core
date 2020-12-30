@@ -38,6 +38,7 @@
 #include <vector>
 
 #include "lama/landmark2d.h"
+#include "lama/simple_landmark2d_map.h"
 
 namespace lama {
 
@@ -47,12 +48,7 @@ class LandmarkPFSlam2D {
 public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
-    struct MapLandmark {
-        EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
-
-        Vector3d mu;
-        Matrix3d sigma;
-    };
+    typedef std::shared_ptr<SimpleLandmark2DMap> SimpleLandmark2DMapPtr;
 
     struct Particle {
         EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -68,7 +64,7 @@ public:
         Pose2D pose;
 
         // The landmark map.
-        Dictionary<uint32_t, MapLandmark> landmarks;
+        SimpleLandmark2DMapPtr map;
 
         // history
         //DynamicArray<Pose2D> poses;

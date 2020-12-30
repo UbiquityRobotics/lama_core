@@ -64,8 +64,10 @@ lama::LandmarkPFSlam2D::LandmarkPFSlam2D(const Options& options)
     particles_[0].resize(num_particles);
     current_particle_set_ = 0;
 
-    for (auto& p : particles_[0])
+    for (auto& p : particles_[0]){
         p.weight = 1.0 / num_particles;
+        p.map = SimpleLandmark2DMapPtr(new SimpleLandmark2DMap);
+    }
 
     neff_ = num_particles;
     has_first_odom_ = false;
@@ -193,32 +195,30 @@ void lama::LandmarkPFSlam2D::updateParticleLandmarks(Particle* particle, const D
     for (const auto& landmark : landmarks){
 
         uint32_t id = landmark.id;
-        auto map_lm = particle->landmarks.find(id);
+        auto* lm = particle->map->get(id);
 
-        if ( map_lm == particle->landmarks.end() ){
+        if ( lm == nullptr ){
             // This is the first time the landmarks is observed.
-            MapLandmark new_lm;
+            lm = particle->map->alloc(id);
 
             // Landmark in map coordinates
-            new_lm.mu = landmark.toCartesian(particle->pose);
+            lm->mu = landmark.toCartesian(particle->pose);
 
             // Calculate covariance
             Vector3d h; Matrix3d H;
-            landmark.predict(particle->pose, new_lm.mu, h, H);
+            landmark.predict(particle->pose, lm->mu, h, H);
 
             Matrix3d Hi = H.inverse();
-            new_lm.sigma = Hi * landmark.sigma * Hi.transpose();
+            lm->sigma = Hi * landmark.sigma * Hi.transpose();
 
-            // add the landmarks to the map
-            particle->landmarks[id] = new_lm;
         } else {
 
             // abbreviation
-            Matrix3d& sig = map_lm->second.sigma;
+            Matrix3d& sig = lm->sigma;
 
             // Predicted landmark
             Vector3d h; Matrix3d H;
-            landmark.predict(particle->pose, map_lm->second.mu, h, H);
+            landmark.predict(particle->pose, lm->mu, h, H);
 
             // inovation
             Vector3d diff = landmark.diff(h);
@@ -238,9 +238,9 @@ void lama::LandmarkPFSlam2D::updateParticleLandmarks(Particle* particle, const D
             Matrix3d K = sig * H.transpose() * Q.inverse();
 
             // Update landmark state
-            map_lm->second.sigma = map_lm->second.sigma - K * H * sig;
+            lm->sigma = lm->sigma - K * H * sig;
             if (is_compatible)
-                map_lm->second.mu = map_lm->second.mu + K * diff;
+                lm->mu = lm->mu + K * diff;
 
             // Calculate weight
             double w = -0.5 * diff.transpose() * Q.inverse() * diff - std::log(std::sqrt(2.0 * M_PI * Q.determinant()));
@@ -307,6 +307,8 @@ void lama::LandmarkPFSlam2D::resample()
         // copy the particle, assumes a copy operator
         particles_[ps][i] = particles_[current_particle_set_][ idx ];
         particles_[ps][i].weight  = 0.0;
+
+        particles_[ps][i].map = SimpleLandmark2DMapPtr( new SimpleLandmark2DMap(*(particles_[ps][i].map)) );
     }
 
     particles_[current_particle_set_].clear();
