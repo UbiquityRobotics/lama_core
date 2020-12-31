@@ -37,15 +37,24 @@
 #include "types.h"
 #include "pose2d.h"
 
-static double normalize_angle(double angle)
+static double normalize(double z)
 {
-    while (angle > M_PI)
-        angle = angle - 2.0 * M_PI;
+    return std::atan2(std::sin(z),std::cos(z));
+}
 
-    while (angle < -M_PI)
-        angle = angle + 2 * M_PI;
-
-    return angle;
+static double angle_diff(double a, double b)
+{
+    double d1, d2;
+    a = normalize(a);
+    b = normalize(b);
+    d1 = a-b;
+    d2 = 2*M_PI - std::fabs(d1);
+    if(d1 > 0)
+        d2 *= -1.0;
+    if(std::fabs(d1) < std::fabs(d2))
+        return(d1);
+    else
+        return(d2);
 }
 
 namespace lama {
@@ -79,7 +88,7 @@ struct Landmark2D {
                  pose.y() + mu(0) * std::sin(pose.rotation() + mu(1));
         }
 
-        h(2) = normalize_angle(mu(2) + pose.rotation());
+        h(2) = normalize(mu(2) + pose.rotation());
 
         return h;
     }
@@ -87,11 +96,9 @@ struct Landmark2D {
     // Calculated the difference between two landmark measurements.
     inline Vector3d diff(const Vector3d& other) const
     {
-        Vector3d h = mu - other;
-        if (is_polar)
-            h(1) = normalize_angle(h(1));
-
-        h(2) = normalize_angle(h(2));
+        Vector3d h;
+        h.head<2>() = mu.head<2>() - other.head<2>();
+        h(2) = angle_diff(mu(2), other(2));
 
         return h;
     }
@@ -101,9 +108,9 @@ struct Landmark2D {
         if (is_polar){
             Vector2d delta = mu.head<2>() - pose.xy();
             double range   = delta.norm();
-            double bearing = normalize_angle(std::atan2(delta.y(), delta.x()) - pose.rotation());
+            double bearing = normalize(std::atan2(delta.y(), delta.x()) - pose.rotation());
 
-            h << range, bearing, normalize_angle(mu(2) - pose.rotation());
+            h << range, bearing, normalize(mu(2) - pose.rotation());
 
             J << delta.x() / range        , delta.y() / range,         0
                 -delta.y() / (range*range), delta.x() / (range*range), 0,
@@ -115,11 +122,9 @@ struct Landmark2D {
 
             Vector2d delta = mu.head<2>() - pose.xy();
 
-            /* h.head<2>() =  pose.state.inverse() *  mu.head<2>(); */
-
             h << delta.x() * cs + delta.y() * sn,
                  delta.y() * cs - delta.x() * sn,
-                 normalize_angle(mu(2) - pose.rotation());
+                 angle_diff(mu(2), pose.rotation());
 
             J << cs,  sn,  0,
                 -sn,  cs,  0,

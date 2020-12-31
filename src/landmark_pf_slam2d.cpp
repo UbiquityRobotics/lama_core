@@ -220,30 +220,33 @@ void lama::LandmarkPFSlam2D::updateParticleLandmarks(Particle* particle, const D
             Vector3d h; Matrix3d H;
             landmark.predict(particle->pose, lm->mu, h, H);
 
+            // Update landmark covariance
+            Matrix3d Q = H * sig * H.transpose() + landmark.sigma;
             // inovation
             Vector3d diff = landmark.diff(h);
 
             // Compatibility test with the Mahalanobis distance.
             bool is_compatible = true;
             if (options_.do_compatibility_test){
-                double d2 = diff.dot(sig.inverse() * diff); // squared Mahalanobis distance
-                constexpr double nsigma  = 11.34 * 11.34;   // 3dof sigma
+                double d2 = diff.transpose() * Q.inverse() * diff; // squared Mahalanobis distance
+                constexpr double nsigma  = 11.34 * 11.34;   // 3dof 99% sigma
                 if ( d2 > nsigma ){
                     is_compatible = false; // do not update
                 }
             }//end if compatibility test
 
             // Kalman gain
-            Matrix3d Q = H * sig * H.transpose() + landmark.sigma;
             Matrix3d K = sig * H.transpose() * Q.inverse();
 
             // Update landmark state
-            lm->sigma = lm->sigma - K * H * sig;
-            if (is_compatible)
+            if (is_compatible){
+                lm->sigma = lm->sigma - K * H * sig;
                 lm->mu = lm->mu + K * diff;
+            }
 
             // Calculate weight
-            double w = -0.5 * diff.transpose() * Q.inverse() * diff - std::log(std::sqrt(2.0 * M_PI * Q.determinant()));
+            double w = -0.5 * diff.transpose() * Q.inverse() * diff - 0.5 * std::log(2.0 * M_PI * Q.determinant());
+
             particle->weight += w;
             particle->weight_sum += w;
         }
