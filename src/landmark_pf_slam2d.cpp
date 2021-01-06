@@ -222,13 +222,15 @@ void lama::LandmarkPFSlam2D::updateParticleLandmarks(Particle* particle, const D
 
             // Update landmark covariance
             Matrix3d Q = H * sig * H.transpose() + landmark.sigma;
+            Matrix3d Qi = Q.inverse();
+
             // inovation
             Vector3d diff = landmark.diff(h);
 
             // Compatibility test with the Mahalanobis distance.
             bool is_compatible = true;
             if (options_.do_compatibility_test){
-                double d2 = diff.transpose() * Q.inverse() * diff; // squared Mahalanobis distance
+                double d2 = diff.transpose() * Qi * diff; // squared Mahalanobis distance
                 constexpr double nsigma  = 11.34 * 11.34;   // 3dof 99% sigma
                 if ( d2 > nsigma ){
                     is_compatible = false; // do not update
@@ -236,7 +238,7 @@ void lama::LandmarkPFSlam2D::updateParticleLandmarks(Particle* particle, const D
             }//end if compatibility test
 
             // Kalman gain
-            Matrix3d K = sig * H.transpose() * Q.inverse();
+            Matrix3d K = sig * H.transpose() * Qi;
 
             // Update landmark state
             if (is_compatible){
@@ -309,7 +311,7 @@ void lama::LandmarkPFSlam2D::resample()
 
         // copy the particle, assumes a copy operator
         particles_[ps][i] = particles_[current_particle_set_][ idx ];
-        particles_[ps][i].weight  = 0.0;
+        particles_[ps][i].normalized_weight  = 1.0 / num_particles;
 
         particles_[ps][i].map = SimpleLandmark2DMapPtr( new SimpleLandmark2DMap(*(particles_[ps][i].map)) );
     }
