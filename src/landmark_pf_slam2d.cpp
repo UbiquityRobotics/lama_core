@@ -69,6 +69,8 @@ lama::LandmarkPFSlam2D::LandmarkPFSlam2D(const Options& options)
         p.map = SimpleLandmark2DMapPtr(new SimpleLandmark2DMap);
     }
 
+    kld_.init(num_particles, options_.max_particles, 0.1);
+
     neff_ = num_particles;
     has_first_odom_ = false;
 }
@@ -89,7 +91,7 @@ bool lama::LandmarkPFSlam2D::update(const DynamicArray<Landmark2D>& landmarks, c
         return true;
     }
 
-    const uint32_t num_particles = options_.particles;
+    const uint32_t num_particles = particles_[current_particle_set_].size();
     for (uint32_t i = 0; i < num_particles; ++i)
         drawFromMotion(odelta, particles_[current_particle_set_][i].pose, particles_[current_particle_set_][i].pose);
 
@@ -101,8 +103,23 @@ bool lama::LandmarkPFSlam2D::update(const DynamicArray<Landmark2D>& landmarks, c
         return false;
 
     // do we have landmarks?
-    if (landmarks.size() == 0)
+    if (landmarks.size() == 0){
+
+        // Force a resample if the accumulated motion is too large.
+        // The objective is to increase the number of particles due to
+        // accumulated error by the motion (i.e. odometry).
+        if ((acc_trans_ > 1.0) || (acc_rot_ > M_PI * 0.5)){
+            resample(false);
+            normalize();
+
+            acc_trans_ = options_.trans_thresh;
+            acc_rot_   = options_.rot_thresh;
+
+            return true;
+        }
+
         return false;
+    }
 
     acc_trans_ = 0;
     acc_rot_   = 0;
@@ -126,7 +143,7 @@ bool lama::LandmarkPFSlam2D::update(const DynamicArray<Landmark2D>& landmarks, c
     normalize();
 
     // resample if needed
-    if (neff_ < (options_.particles*0.5) )
+    if (neff_ < (num_particles*0.5) )
         resample();
 
     return true;
@@ -259,9 +276,10 @@ void lama::LandmarkPFSlam2D::updateParticleLandmarks(Particle* particle, const D
 
 void lama::LandmarkPFSlam2D::normalize()
 {
-    double gain = 1.0 / (options_.meas_sigma_gain * options_.particles);
+    const uint32_t num_particles = particles_[current_particle_set_].size();
+
+    double gain = 1.0 / (options_.meas_sigma_gain * num_particles);
     double max_l  = particles_[current_particle_set_][0].weight;
-    const uint32_t num_particles = options_.particles;
     for (uint32_t i = 1; i < num_particles; ++i)
         if (max_l < particles_[current_particle_set_][i].weight)
             max_l = particles_[current_particle_set_][i].weight;
@@ -282,38 +300,39 @@ void lama::LandmarkPFSlam2D::normalize()
     neff_ = 1.0 / neff_;
 }
 
-void lama::LandmarkPFSlam2D::resample()
+void lama::LandmarkPFSlam2D::resample(bool reset_weight)
 {
-    const uint32_t num_particles = options_.particles;
-    std::vector<int32_t> sample_idx(num_particles);
+    const uint32_t num_particles = particles_[current_particle_set_].size();
+    DynamicArray<double> c(num_particles + 1);
 
-    double interval = 1.0 / (double)num_particles;
-
-    double target = interval * random::uniform();
-    double   cw  = 0.0;
-    uint32_t n   = 0;
-    for (size_t i = 0; i < num_particles; ++i){
-        cw += particles_[current_particle_set_][i].normalized_weight;
-
-        while( cw > target){
-            sample_idx[n++]=i;
-            target += interval;
-        }
-    }
-
-    // generate a new set of particles
+    c[0] = 0.0;
+    for (size_t i = 0; i < num_particles; ++i)
+        c[i+1] = c[i] + particles_[current_particle_set_][i].normalized_weight;
 
     uint8_t ps = 1 - current_particle_set_;
-    particles_[ps].resize(num_particles);
+    particles_[ps].reserve(num_particles);
 
-    for (size_t i = 0; i < num_particles; ++i) {
-        uint32_t idx = sample_idx[i];;
+    kld_.reset();
+    for (size_t i = 0; i < kld_.samples_max; ++i){
 
-        // copy the particle, assumes a copy operator
-        particles_[ps][i] = particles_[current_particle_set_][ idx ];
-        particles_[ps][i].normalized_weight  = 1.0 / num_particles;
+        double r = random::uniform();
+        uint32_t idx;
+        for (idx = 0; idx < num_particles; ++idx)
+            if ((c[idx] <= r) && (r < c[idx+1]))
+                break;
 
-        particles_[ps][i].map = SimpleLandmark2DMapPtr( new SimpleLandmark2DMap(*(particles_[ps][i].map)) );
+        particles_[ps].emplace_back( Particle{} );
+        particles_[ps].back() = particles_[current_particle_set_][idx];
+
+        if (reset_weight)
+            particles_[ps].back().weight = 0.0;
+
+        particles_[ps].back().map = SimpleLandmark2DMapPtr(new SimpleLandmark2DMap(*(particles_[current_particle_set_][idx].map)));
+
+        auto& pose = particles_[ps].back().pose;
+        auto kld_samples = kld_.resample_limit( {pose.x(), pose.y(), pose.rotation()} );
+
+        if (particles_[ps].size() >= kld_samples) break;
     }
 
     particles_[current_particle_set_].clear();

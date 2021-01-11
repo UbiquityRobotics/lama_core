@@ -37,6 +37,7 @@
 #include <memory>
 #include <vector>
 
+#include "lama/kld_sampling.h"
 #include "lama/landmark2d.h"
 #include "lama/simple_landmark2d_map.h"
 
@@ -74,8 +75,10 @@ public:
     struct Options {
         Options(){}
 
-        /// The number of particles to use
-        uint32_t particles;
+        /// The minumum number of particles to use
+        uint32_t particles = 100;
+        /// The maximum number of particles to use
+        uint32_t max_particles = 500;
         /// How much the rotation affects rotation.
         double srr = 0.1;
         /// How much the translation affects rotation.
@@ -132,13 +135,14 @@ private:
     void updateParticleLandmarks(Particle* particle, const DynamicArray<Landmark2D>& landmarks);
 
     void normalize();
-    void resample();
+    void resample(bool reset_weight = true);
 
 private:
     Options options_;
 
     DynamicArray<Particle> particles_[2];
     uint8_t current_particle_set_;
+    KLDSampling kld_;
 
     Pose2D odom_;
     bool has_first_odom_;
