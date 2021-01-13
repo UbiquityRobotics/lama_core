@@ -263,8 +263,10 @@ void lama::LandmarkPFSlam2D::updateParticleLandmarks(Particle* particle, const D
                 lm->mu = lm->mu + K * diff;
             }
 
-            // Calculate weight
-            double w = -0.5 * diff.transpose() * Q.inverse() * diff - 0.5 * std::log(2.0 * M_PI * Q.determinant());
+            // Calculate weight (or likelihood)
+            // The likelihood is the log of a non normalized multivariant gaussian pdf.
+            // The normalizer is not needed. The final result is the same and we save some caluculation.
+            double w = -0.5 * diff.transpose() * Q.inverse() * diff;
 
             particle->weight += w;
             particle->weight_sum += w;
