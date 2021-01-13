@@ -39,7 +39,7 @@
 void lama::KLDSampling::init(uint32_t min, uint32_t max, double error, double z)
 {
     samples_min = std::max(min, forced_samples_min);
-    samples_max = max;
+    samples_max = std::max(samples_min, max);
 
     pop_error = error;
     pop_z     = z;
