@@ -69,7 +69,7 @@ lama::LandmarkPFSlam2D::LandmarkPFSlam2D(const Options& options)
         p.map = SimpleLandmark2DMapPtr(new SimpleLandmark2DMap);
     }
 
-    kld_.init(num_particles, options_.max_particles, 0.1);
+    kld_.init(num_particles, options_.max_particles, 0.04);
 
     neff_ = num_particles;
     has_first_odom_ = false;
