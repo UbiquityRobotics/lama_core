@@ -127,6 +127,9 @@ public:
     inline double getNeff() const
     { return neff_; }
 
+    inline uint32_t getNumParticles() const
+    { return particles_[current_particle_set_].size(); }
+
 
 private:
 
