@@ -109,8 +109,8 @@ bool lama::LandmarkPFSlam2D::update(const DynamicArray<Landmark2D>& landmarks, c
         // The objective is to increase the number of particles due to
         // accumulated error by the motion (i.e. odometry).
         if ((acc_trans_ > 1.0) || (acc_rot_ > M_PI * 0.5)){
-            resample(false);
             normalize();
+            resample(false);
 
             acc_trans_ = options_.trans_thresh;
             acc_rot_   = options_.rot_thresh;
