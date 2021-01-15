@@ -44,7 +44,7 @@
 #include "sdm/dynamic_distance_map.h"
 #include "sdm/frequency_occupancy_map.h"
 
-#include "lama/landmark2d.h"
+#include "lama/kld_sampling.h"
 #include "lama/simple_landmark2d_map.h"
 
 #include <Eigen/StdVector>
@@ -73,8 +73,11 @@ public:
     struct Particle {
         EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
-        // The weight of the particle
-        double weight;
+        // The weight of the particle.
+        // from the occupancy grids
+        double weight = 0.0;
+        // from the landmarks
+        double lm_weight = 0.0;
 
         double normalized_weight;
 
@@ -137,12 +140,17 @@ public:
     inline void probeMem()
     { summary->memory.push_back(getMemoryUsage()); }
 
+    inline uint32_t getNumParticles() const
+    { return particles_[current_particle_set_].size(); }
+
     // All SLAM options are in one place for easy access and passing.
     struct Options {
         Options(){}
 
         /// The number of particles to use
         uint32_t particles;
+        /// Maximum number of particles to use
+        uint32_t max_particles;
         /// How much the rotation affects rotation.
         double srr = 0.1;
         /// How much the translation affects rotation.
@@ -207,7 +215,7 @@ public:
     uint64_t getMemoryUsage() const;
     uint64_t getMemoryUsage(uint64_t& occmem, uint64_t& dmmem) const;
 
-    bool update(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark2D>& landmarks, const Pose2D& odometry, double timestamp);
+    bool update(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark>& landmarks, const Pose2D& odometry, double timestamp);
 
     size_t getBestParticleIdx() const;
 
@@ -221,7 +229,7 @@ public:
 
     inline const FrequencyOccupancyMap* getOccupancyMap() const
     {
-        if (!has_first_scan) return nullptr;
+        if (!has_first_scan_) return nullptr;
 
         size_t pidx = getBestParticleIdx();
         return particles_[current_particle_set_][pidx].occ.get();
@@ -229,7 +237,7 @@ public:
 
     inline const DynamicDistanceMap* getDistanceMap() const
     {
-        if (!has_first_scan) return nullptr;
+        if (!has_first_scan_) return nullptr;
 
         size_t pidx = getBestParticleIdx();
         return particles_[current_particle_set_][pidx].dm.get();
@@ -237,7 +245,7 @@ public:
 
     inline const SimpleLandmark2DMap* getLandmarkMap() const
     {
-        if (!has_first_scan) return nullptr;
+        if (!has_first_scan_) return nullptr;
 
         size_t pidx = getBestParticleIdx();
         return particles_[current_particle_set_][pidx].lm.get();
@@ -265,10 +273,10 @@ private:
     void scanMatch(Particle* particle);
     void updateParticleMaps(Particle* particle);
 
-    void updateParticleLandmarks(Particle* particle, const DynamicArray<Landmark2D>& landmarks);
+    void updateParticleLandmarks(Particle* particle, const DynamicArray<Landmark>& landmarks);
 
     void normalize();
-    void resample();
+    void resample(bool reset_weight = false);
 
 private:
     Options options_;
@@ -276,13 +284,15 @@ private:
 
     std::vector<Particle> particles_[2];
     uint8_t current_particle_set_;
+    KLDSampling kld_;
 
     Pose2D odom_;
     Pose2D pose_;
 
     double acc_trans_;
     double acc_rot_;
-    bool   has_first_scan;
+    bool has_first_scan_;
+    bool valid_surface_;
 
     double truncated_ray_;
     double truncated_range_;

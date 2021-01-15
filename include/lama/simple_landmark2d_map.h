@@ -38,6 +38,7 @@
 
 #include "types.h"
 #include "cow_ptr.h"
+#include "pose3d.h"
 
 namespace lama {
 
@@ -46,8 +47,8 @@ struct SimpleLandmark2DMap {
     struct Landmark {
         EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
 
-        Vector3d mu;
-        Matrix3d sigma;
+        Pose3D   state;
+        Matrix6d covar;
     };
 
     // Landmarks are identified by their unique id.
@@ -87,6 +88,14 @@ struct SimpleLandmark2DMap {
 
         return result.first->second.get();
     }
+
+    // Update the state of a landmark.
+    // Returns true if the update is successful.
+    bool update(uint32_t id, const Pose3D& pose, const Vector3d& measurement, const Matrix6d& covar);
+
+    // Get the current state of a landmark.
+    // Returns false if the landmark does not exist.
+    bool get(uint32_t id, Pose3D& state, Matrix6d* covar = nullptr) const;
 
     // Landmark visitor function
     typedef std::function<void(uint32_t, const Landmark&)> Visitor;

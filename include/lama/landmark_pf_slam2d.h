@@ -38,8 +38,9 @@
 #include <vector>
 
 #include "lama/kld_sampling.h"
-#include "lama/landmark2d.h"
 #include "lama/simple_landmark2d_map.h"
+
+#include "lama/pose2d.h"
 
 namespace lama {
 
@@ -110,7 +111,7 @@ public:
     LandmarkPFSlam2D(const Options& options = Options());
     virtual ~LandmarkPFSlam2D();
 
-    bool update(const DynamicArray<Landmark2D>& landmarks, const Pose2D& odometry, double timestamp);
+    bool update(const DynamicArray<Landmark>& landmarks, const Pose2D& odometry, double timestamp);
 
     size_t getBestParticleIdx() const;
 
@@ -135,7 +136,7 @@ private:
 
     void drawFromMotion(const Pose2D& delta, const Pose2D& old_pose, Pose2D& pose);
 
-    void updateParticleLandmarks(Particle* particle, const DynamicArray<Landmark2D>& landmarks);
+    void updateParticleLandmarks(Particle* particle, const DynamicArray<Landmark>& landmarks);
 
     void normalize();
     void resample(bool reset_weight = true);

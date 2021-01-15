@@ -33,6 +33,7 @@
  */
 
 #include <fstream>
+#include <iostream>
 
 #include "lama/print.h"
 #include "lama/thread_pool.h"
@@ -46,6 +47,26 @@
 #include "lama/match_surface_2d.h"
 
 #include "lama/sdm/export.h"
+
+static double normalize(double z)
+{
+    return std::atan2(std::sin(z),std::cos(z));
+}
+
+static double angle_diff(double a, double b)
+{
+    double d1, d2;
+    a = normalize(a);
+    b = normalize(b);
+    d1 = a-b;
+    d2 = 2*M_PI - std::fabs(d1);
+    if(d1 > 0)
+        d2 *= -1.0;
+    if(std::fabs(d1) < std::fabs(d2))
+        return(d1);
+    else
+        return(d2);
+}
 
 std::string lama::HybridPFSlam2D::Summary::report() const
 {
@@ -112,7 +133,8 @@ lama::HybridPFSlam2D::HybridPFSlam2D(const Options& options)
     /* solver_options_.robust_cost    = makeRobust("cauchy", 0.25); */
     solver_options_.robust_cost.reset(new CauchyWeight(0.15));
 
-    has_first_scan = false;
+    neff_ = options.particles;
+    has_first_scan_ = false;
     truncated_ray_ = options.truncated_ray;
     truncated_range_ = options.truncated_range;
 
@@ -132,8 +154,38 @@ lama::HybridPFSlam2D::HybridPFSlam2D(const Options& options)
 
     random::setSeed(options_.seed);
 
+    // Initialize the all particle.
+    const uint32_t num_particles = options_.particles;
+    particles_[0].resize(num_particles);
+    current_particle_set_ = 0;
+
+    particles_[0][0].poses.push_back(pose_);
+    particles_[0][0].pose = pose_;
+
+    particles_[0][0].weight     = 0.0;
+    particles_[0][0].weight_sum = 0.0;
+    particles_[0][0].dm = DynamicDistanceMapPtr(new DynamicDistanceMap(options_.resolution, options_.patch_size));
+    particles_[0][0].dm->setMaxDistance(options_.l2_max);
+    particles_[0][0].dm->useCompression(options_.use_compression,  options_.cache_size, options_.calgorithm);
+
+    particles_[0][0].occ = FrequencyOccupancyMapPtr(new FrequencyOccupancyMap(options_.resolution, options_.patch_size));
+    particles_[0][0].occ->useCompression(options_.use_compression, options_.cache_size, options_.calgorithm);
+    particles_[0][0].lm = SimpleLandmark2DMapPtr(new SimpleLandmark2DMap());
+
+    for (uint32_t i = 1; i < num_particles; ++i){
+        particles_[0][i].poses.push_back(pose_);
+        particles_[0][i].pose = pose_;
+
+        particles_[0][i].weight     = 0.0;
+        particles_[0][i].weight_sum = 0.0;
+
+        particles_[0][i].lm  = SimpleLandmark2DMapPtr( new SimpleLandmark2DMap(*(particles_[0][0].lm)) );
+    }
+
     if (options.create_summary)
         summary = new Summary();
+
+    kld_.init(options.particles, options_.max_particles, 0.04);
 }
 
 lama::HybridPFSlam2D::~HybridPFSlam2D()
@@ -174,47 +226,31 @@ uint64_t lama::HybridPFSlam2D::getMemoryUsage(uint64_t& occmem, uint64_t& dmmem)
     return occmem + dmmem;
 }
 
-bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark2D>& landmarks,
+bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark>& landmarks,
                                   const Pose2D& odometry, double timestamp)
 {
     Timer timer(true);
     Timer local_timer;
 
-    current_surface_ = surface;
+    if (not has_first_scan_){
+        // The SLAM will only start once a first valid scan is received.
+        if (surface->points.size() < 50){
+            return false;
+        }
 
-    if (not has_first_scan){
-        odom_ = odometry;
         timestamps_.push_back(timestamp);
 
-        // initialize particles
-        const uint32_t num_particles = options_.particles;
-        particles_[0].resize(num_particles);
-        current_particle_set_ = 0;
+        // Lets update the maps of single particle and then
+        // replicate the result to the remaining particles.
+        // This is faster than applying the first scan to each
+        // individual particle.
+        current_surface_ = surface;
+        updateParticleMaps(&particles_[current_particle_set_][0]);
 
-        particles_[0][0].poses.push_back(pose_);
-        particles_[0][0].pose = pose_;
-
-        particles_[0][0].weight     = 0.0;
-        particles_[0][0].weight_sum = 0.0;
-        particles_[0][0].dm = DynamicDistanceMapPtr(new DynamicDistanceMap(options_.resolution, options_.patch_size));
-        particles_[0][0].dm->setMaxDistance(options_.l2_max);
-        particles_[0][0].dm->useCompression(options_.use_compression,  options_.cache_size, options_.calgorithm);
-
-        particles_[0][0].occ = FrequencyOccupancyMapPtr(new FrequencyOccupancyMap(options_.resolution, options_.patch_size));
-        particles_[0][0].occ->useCompression(options_.use_compression, options_.cache_size, options_.calgorithm);
-        particles_[0][0].lm = SimpleLandmark2DMapPtr(new SimpleLandmark2DMap());
-
-        updateParticleMaps(&(particles_[0][0]));
-
+        const uint32_t num_particles = particles_[current_particle_set_].size();
         for (uint32_t i = 1; i < num_particles; ++i){
-            particles_[0][i].poses.push_back(pose_);
-            particles_[0][i].pose = pose_;
-
-            particles_[0][i].weight     = 0.0;
-            particles_[0][i].weight_sum = 0.0;
-            particles_[0][i].dm  = DynamicDistanceMapPtr(new DynamicDistanceMap(*particles_[0][0].dm ));
-            particles_[0][i].occ = FrequencyOccupancyMapPtr(new FrequencyOccupancyMap(*particles_[0][0].occ));
-            particles_[0][i].lm  = SimpleLandmark2DMapPtr( new SimpleLandmark2DMap(*(particles_[0][0].lm)) );
+            particles_[0][i].dm  = DynamicDistanceMapPtr(new DynamicDistanceMap(*particles_[current_particle_set_][0].dm));
+            particles_[0][i].occ = FrequencyOccupancyMapPtr(new FrequencyOccupancyMap(*particles_[current_particle_set_][0].occ));
         }
 
         if (summary){
@@ -225,8 +261,8 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
             probeMem();
         }
 
-        neff_ = num_particles;
-        has_first_scan = true;
+        has_first_scan_ = true;
+        odom_ = odometry;
         return true;
     }
 
@@ -234,7 +270,7 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
     Pose2D odelta = odom_ - odometry;
     odom_ = odometry;
 
-    const uint32_t num_particles = options_.particles;
+    uint32_t num_particles = particles_[current_particle_set_].size();
     for (uint32_t i = 0; i < num_particles; ++i)
         drawFromMotion(odelta, particles_[current_particle_set_][i].pose, particles_[current_particle_set_][i].pose);
 
@@ -242,29 +278,53 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
     acc_trans_ += odelta.xy().norm();
     acc_rot_   += std::fabs(odelta.rotation());
     if (acc_trans_ <= options_.trans_thresh &&
-        acc_rot_ <= options_.rot_thresh)
+        acc_rot_ <= options_.rot_thresh){
         return false;
+    }
 
-    // save the reading
-    //readings_.push_back(surface);
+    // Do we have data??
+    bool is_valid = surface->points.size() >= 50;
+    if (!is_valid and landmarks.size() == 0){
+
+        valid_surface_ = false;
+
+        // Force a resample if the accumulated motion is too large.
+        // The objective is to increase the number of particles due to
+        // accumulated error by the motion (i.e. odometry).
+        if ((acc_trans_ > 1.0) || (acc_rot_ > M_PI * 0.5)){
+            normalize();
+            resample(false);
+
+            acc_trans_ = options_.trans_thresh;
+            acc_rot_   = options_.rot_thresh;
+
+            return true;
+        }
+
+        return false;
+    }
+
 
     acc_trans_ = 0;
     acc_rot_   = 0;
 
     // 2. Apply scan matching
+    current_surface_ = surface;
     local_timer.reset();
 
     if (thread_pool_){
 
         for (uint32_t i = 0; i < num_particles; ++i)
-            thread_pool_->enqueue([this, i](){
+            thread_pool_->enqueue([this, i, &landmarks](){
                 scanMatch(&(particles_[current_particle_set_][i]));
+                updateParticleLandmarks(&(particles_[current_particle_set_][i]), landmarks);
             });
 
         thread_pool_->wait();
     } else {
         for (uint32_t i = 0; i < num_particles; ++i){
             scanMatch(&particles_[current_particle_set_][i]);
+            updateParticleLandmarks(&(particles_[current_particle_set_][i]), landmarks);
         } // end for
     } // end if
 
@@ -280,10 +340,16 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
         probeNTime(local_timer.elapsed());
 
     // 4. resample if needed
-    if (neff_ < (options_.particles*0.5)){
+    // Force a resample if we have an invalid surface followed by a valid surface.
+    // The objective is to reduce the number of samples before the map update happens.
+    bool force_resample = is_valid && !valid_surface_;
+    valid_surface_ = is_valid;
+
+    if (force_resample || neff_ < (num_particles*0.5)){
         local_timer.reset();
 
         resample();
+        num_particles = particles_[current_particle_set_].size();
 
         if (summary)
             probeRTime(local_timer.elapsed());
@@ -294,16 +360,14 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
 
     if (thread_pool_){
         for (uint32_t i = 0; i < num_particles; ++i)
-            thread_pool_->enqueue([this, i, &landmarks](){
+            thread_pool_->enqueue([this, i](){
                 updateParticleMaps(&(particles_[current_particle_set_][i]));
-                updateParticleLandmarks(&(particles_[current_particle_set_][i]), landmarks);
             });
 
         thread_pool_->wait();
     } else {
         for (uint32_t i = 0; i < num_particles; ++i){
             updateParticleMaps(&particles_[current_particle_set_][i]);
-            updateParticleLandmarks(&(particles_[current_particle_set_][i]), landmarks);
         }
     }
 
@@ -319,7 +383,7 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
 
 size_t lama::HybridPFSlam2D::getBestParticleIdx() const
 {
-    const uint32_t num_particles = options_.particles;
+    const uint32_t num_particles = particles_[current_particle_set_].size();
 
     size_t best_idx = 0;
     double best_ws  = particles_[current_particle_set_][0].weight_sum;
@@ -430,6 +494,7 @@ void lama::HybridPFSlam2D::scanMatch(Particle* particle)
 {
     /* const PointCloudXYZ::Ptr surface = readings_.back(); */
     const PointCloudXYZ::Ptr surface = current_surface_;
+    if (surface->points.size() < 50) return;
 
     MatchSurface2D match_surface(particle->dm.get(), surface, particle->pose.state);
 
@@ -452,6 +517,7 @@ void lama::HybridPFSlam2D::scanMatch(Particle* particle)
 void lama::HybridPFSlam2D::updateParticleMaps(Particle* particle)
 {
     const PointCloudXYZ::Ptr surface = current_surface_;
+    if (surface->points.size() < 50) return;
 
     // 1. Transform the point cloud to the model coordinates.
     Affine3d moving_tf = Translation3d(surface->sensor_origin_) * surface->sensor_orientation_;
@@ -523,8 +589,12 @@ void lama::HybridPFSlam2D::updateParticleMaps(Particle* particle)
     particle->dm->update();
 }
 
-void lama::HybridPFSlam2D::updateParticleLandmarks(Particle* particle, const DynamicArray<Landmark2D>& landmarks)
+void lama::HybridPFSlam2D::updateParticleLandmarks(Particle* particle, const DynamicArray<Landmark>& landmarks)
 {
+    // Get the particle pose in 3D
+    auto xyr = particle->pose.xyr();
+    Pose3D pose(Vector3d(xyr(0), xyr(1), 0.0), xyr(2));
+
     for (const auto& landmark : landmarks){
 
         uint32_t id = landmark.id;
@@ -535,53 +605,70 @@ void lama::HybridPFSlam2D::updateParticleLandmarks(Particle* particle, const Dyn
             lm = particle->lm->alloc(id);
 
             // Landmark in map coordinates
-            lm->mu = landmark.toCartesian(particle->pose);
+            lm->state = pose + Pose3D(landmark.measurement);
 
             // Calculate covariance
-            Vector3d h; Matrix3d H;
-            landmark.predict(particle->pose, lm->mu, h, H);
+            Matrix6d H;
+            H.setIdentity();
+            H.topLeftCorner<3,3>() = pose.state.rotationMatrix().transpose();
 
-            Matrix3d Hi = H.inverse();
-            lm->sigma = Hi * landmark.sigma * Hi.transpose();
-
+            Matrix6d Hi = H.inverse();
+            lm->covar = Hi * landmark.covar * Hi.transpose();
         } else {
+
             // abbreviation
-            Matrix3d& sig = lm->sigma;
+            Matrix6d& sig = lm->covar;
 
             // Predicted landmark
-            Vector3d h; Matrix3d H;
-            landmark.predict(particle->pose, lm->mu, h, H);
+            auto h = pose - lm->state;
+
+            Matrix6d H; H.setIdentity();
+            H.topLeftCorner<3,3>() = pose.state.rotationMatrix().transpose();
 
             // Update landmark covariance
-            Matrix3d Q = H * sig * H.transpose() + landmark.sigma;
-            Matrix3d Qi = Q.inverse();
+            Matrix6d Q = H * sig * H.transpose() + landmark.covar;
+            Matrix6d Qi = Q.inverse();
 
             // inovation
-            Vector3d diff = landmark.diff(h);
+            auto hmm = h - landmark.measurement;
+            Vector6d a; a << h.xyz(), h.rpy();
+            Vector6d b = landmark.measurement;
+
+            Vector6d diff;
+            diff << b.head<3>() - a.head<3>(),
+                    angle_diff(b(3), a(3)),
+                    angle_diff(b(4), a(4)),
+                    angle_diff(b(5), a(5));
 
             // Compatibility test with the Mahalanobis distance.
             bool is_compatible = true;
             if (options_.do_compatibility_test){
                 double d2 = diff.transpose() * Qi * diff; // squared Mahalanobis distance
-                constexpr double nsigma  = 11.34 * 11.34;   // 3dof 99% sigma
+                constexpr double nsigma  = 16.8119 * 16.8119;   // 3dof 99% sigma
                 if ( d2 > nsigma ){
                     is_compatible = false; // do not update
                 }
             }//end if compatibility test
 
             // Kalman gain
-            Matrix3d K = sig * H.transpose() * Qi;
+            Matrix6d K = sig * H.transpose() * Qi;
 
             // Update landmark state
             if (is_compatible){
-                lm->sigma = lm->sigma - K * H * sig;
-                lm->mu = lm->mu + K * diff;
+                lm->covar = sig - K * H * sig;
+
+                Vector6d s; s << lm->state.xyz(), lm->state.rpy();
+                s = s + K * diff;
+
+                lm->state = Pose3D(s.head<3>(), s.tail<3>());
             }
 
-            // Calculate weight
-            double w = -0.5 * diff.transpose() * Qi * diff - 0.5 * std::log(2.0 * M_PI * Q.determinant());
+            // Calculate weight (or likelihood)
+            // The likelihood is the log of a non normalized multivariant gaussian pdf.
+            // The normalizer is not needed. The final result is the same and we save some caluculation.
+            double w = -0.5 * diff.transpose() * Q.inverse() * diff;
 
-            particle->weight += w;
+            particle->lm_weight += w;
             particle->weight_sum += w;
         }
 
@@ -591,18 +678,29 @@ void lama::HybridPFSlam2D::updateParticleLandmarks(Particle* particle, const Dyn
 
 void lama::HybridPFSlam2D::normalize()
 {
-    /* double gain = options_.meas_sigma_gain; //1.0 / (options_.meas_sigma_gain * options_.particles); */
-    double gain = 1.0 / (options_.meas_sigma_gain * options_.particles);
-    double max_l  = particles_[current_particle_set_][0].weight;
-    const uint32_t num_particles = options_.particles;
-    for (uint32_t i = 1; i < num_particles; ++i)
+    const uint32_t num_particles = particles_[current_particle_set_].size();
+
+    double gain   = 1.0 / (options_.meas_sigma_gain * num_particles);
+    double lmgain = 1.0 / (0.1 * num_particles);
+
+    double max_l   = particles_[current_particle_set_][0].weight;
+    double max_llm = particles_[current_particle_set_][0].lm_weight;
+
+    for (uint32_t i = 1; i < num_particles; ++i){
         if (max_l < particles_[current_particle_set_][i].weight)
             max_l = particles_[current_particle_set_][i].weight;
+
+        if (max_llm < particles_[current_particle_set_][i].lm_weight)
+            max_llm = particles_[current_particle_set_][i].lm_weight;
+    }
 
     double sum = 0;
     for (uint32_t i = 0; i < num_particles; ++i){
 
-        particles_[current_particle_set_][i].normalized_weight = std::exp(gain*(particles_[current_particle_set_][i].weight - max_l));
+        double l = gain*(particles_[current_particle_set_][i].weight - max_l) +
+                   lmgain*(particles_[current_particle_set_][i].lm_weight - max_llm);
+        particles_[current_particle_set_][i].normalized_weight  = std::exp(l);
+
         sum += particles_[current_particle_set_][i].normalized_weight;
     }
 
@@ -615,40 +713,42 @@ void lama::HybridPFSlam2D::normalize()
     neff_ = 1.0 / neff_;
 }
 
-void lama::HybridPFSlam2D::resample()
+void lama::HybridPFSlam2D::resample(bool reset_weight)
 {
-    const uint32_t num_particles = options_.particles;
-    std::vector<int32_t> sample_idx(num_particles);
+    const uint32_t num_particles = particles_[current_particle_set_].size();
+    DynamicArray<double> c(num_particles + 1);
 
-    double interval = 1.0 / (double)num_particles;
-
-    double target = interval * random::uniform();
-    double   cw  = 0.0;
-    uint32_t n   = 0;
-    for (size_t i = 0; i < num_particles; ++i){
-        cw += particles_[current_particle_set_][i].normalized_weight;
-
-        while( cw > target){
-            sample_idx[n++]=i;
-            target += interval;
-        }
-    }
-
-    // generate a new set of particles
+    c[0] = 0.0;
+    for (size_t i = 0; i < num_particles; ++i)
+        c[i+1] = c[i] + particles_[current_particle_set_][i].normalized_weight;
 
     uint8_t ps = 1 - current_particle_set_;
-    particles_[ps].resize(num_particles);
+    particles_[ps].reserve(options_.max_particles);
 
-    for (size_t i = 0; i < num_particles; ++i) {
-        uint32_t idx = sample_idx[i];;
+    uint32_t kld_samples = 0;
+    kld_.reset();
+    for (size_t i = 0; i < kld_.samples_max; ++i){
 
-        particles_[ps][i] = particles_[current_particle_set_][ idx ];
-        particles_[ps][i].weight  = 0.0;
-        particles_[ps][i].weight_sum  = particles_[current_particle_set_][idx].weight_sum;
+        double r = random::uniform();
+        uint32_t idx;
+        for (idx = 0; idx < num_particles; ++idx)
+            if ((c[idx] <= r) && (r < c[idx+1]))
+                break;
 
-        particles_[ps][i].dm  = DynamicDistanceMapPtr(new DynamicDistanceMap(*(particles_[current_particle_set_][idx].dm)));
-        particles_[ps][i].occ = FrequencyOccupancyMapPtr(new FrequencyOccupancyMap(*(particles_[current_particle_set_][idx].occ)));
-        particles_[ps][i].lm = SimpleLandmark2DMapPtr(new SimpleLandmark2DMap(*(particles_[current_particle_set_][i].lm)));
+        particles_[ps].emplace_back( Particle{} );
+        particles_[ps].back() = particles_[current_particle_set_][idx];
+
+        if (reset_weight)
+            particles_[ps].back().weight = 0.0;
+
+        particles_[ps].back().dm  = DynamicDistanceMapPtr(new DynamicDistanceMap(*(particles_[current_particle_set_][idx].dm)));
+        particles_[ps].back().occ = FrequencyOccupancyMapPtr(new FrequencyOccupancyMap(*(particles_[current_particle_set_][idx].occ)));
+        particles_[ps].back().lm = SimpleLandmark2DMapPtr(new SimpleLandmark2DMap(*(particles_[current_particle_set_][idx].lm)));
+
+        auto& pose = particles_[ps].back().pose;
+        kld_samples = kld_.resample_limit( {pose.x(), pose.y(), pose.rotation()} );
+
+        if (particles_[ps].size() >= kld_samples) break;
     }
 
     particles_[current_particle_set_].clear();

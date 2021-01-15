@@ -39,6 +39,26 @@
 
 #include "lama/landmark_pf_slam2d.h"
 
+static double normalize(double z)
+{
+    return std::atan2(std::sin(z),std::cos(z));
+}
+
+static double angle_diff(double a, double b)
+{
+    double d1, d2;
+    a = normalize(a);
+    b = normalize(b);
+    d1 = a-b;
+    d2 = 2*M_PI - std::fabs(d1);
+    if(d1 > 0)
+        d2 *= -1.0;
+    if(std::fabs(d1) < std::fabs(d2))
+        return(d1);
+    else
+        return(d2);
+}
+
 
 lama::LandmarkPFSlam2D::LandmarkPFSlam2D(const Options& options)
     : options_(options)
@@ -80,7 +100,7 @@ lama::LandmarkPFSlam2D::~LandmarkPFSlam2D()
     delete thread_pool_;
 }
 
-bool lama::LandmarkPFSlam2D::update(const DynamicArray<Landmark2D>& landmarks, const Pose2D& odometry, double timestamp)
+bool lama::LandmarkPFSlam2D::update(const DynamicArray<Landmark>& landmarks, const Pose2D& odometry, double timestamp)
 {
     // 1. Predict from odometry
     Pose2D odelta = odom_ - odometry;
@@ -207,8 +227,12 @@ void lama::LandmarkPFSlam2D::drawFromMotion(const Pose2D& delta, const Pose2D& o
     pose += Pose2D(x, y, yaw);
 }
 
-void lama::LandmarkPFSlam2D::updateParticleLandmarks(Particle* particle, const DynamicArray<Landmark2D>& landmarks)
+void lama::LandmarkPFSlam2D::updateParticleLandmarks(Particle* particle, const DynamicArray<Landmark>& landmarks)
 {
+    // Get the particle pose in 3D
+    auto xyr = particle->pose.xyr();
+    Pose3D pose(Vector3d(xyr(0), xyr(1), 0.0), xyr(2));
+
     for (const auto& landmark : landmarks){
 
         uint32_t id = landmark.id;
@@ -219,48 +243,62 @@ void lama::LandmarkPFSlam2D::updateParticleLandmarks(Particle* particle, const D
             lm = particle->map->alloc(id);
 
             // Landmark in map coordinates
-            lm->mu = landmark.toCartesian(particle->pose);
+            lm->state = pose + Pose3D(landmark.measurement);
 
             // Calculate covariance
-            Vector3d h; Matrix3d H;
-            landmark.predict(particle->pose, lm->mu, h, H);
+            Matrix6d H;
+            H.setIdentity();
+            H.topLeftCorner<3,3>() = pose.state.rotationMatrix().transpose();
 
-            Matrix3d Hi = H.inverse();
-            lm->sigma = Hi * landmark.sigma * Hi.transpose();
-
+            Matrix6d Hi = H.inverse();
+            lm->covar = Hi * landmark.covar * Hi.transpose();
         } else {
 
             // abbreviation
-            Matrix3d& sig = lm->sigma;
+            Matrix6d& sig = lm->covar;
 
             // Predicted landmark
-            Vector3d h; Matrix3d H;
-            landmark.predict(particle->pose, lm->mu, h, H);
+            auto h = pose - lm->state;
+
+            Matrix6d H; H.setIdentity();
+            H.topLeftCorner<3,3>() = pose.state.rotationMatrix().transpose();
 
             // Update landmark covariance
-            Matrix3d Q = H * sig * H.transpose() + landmark.sigma;
-            Matrix3d Qi = Q.inverse();
+            Matrix6d Q = H * sig * H.transpose() + landmark.covar;
+            Matrix6d Qi = Q.inverse();
 
             // inovation
-            Vector3d diff = landmark.diff(h);
+            auto hmm = h - landmark.measurement;
+            Vector6d a; a << h.xyz(), h.rpy();
+            Vector6d b = landmark.measurement;
+
+            Vector6d diff;
+            diff << b.head<3>() - a.head<3>(),
+                    angle_diff(b(3), a(3)),
+                    angle_diff(b(4), a(4)),
+                    angle_diff(b(5), a(5));
 
             // Compatibility test with the Mahalanobis distance.
             bool is_compatible = true;
             if (options_.do_compatibility_test){
                 double d2 = diff.transpose() * Qi * diff; // squared Mahalanobis distance
-                constexpr double nsigma  = 11.34 * 11.34;   // 3dof 99% sigma
+                constexpr double nsigma  = 16.8119 * 16.8119;   // 3dof 99% sigma
                 if ( d2 > nsigma ){
                     is_compatible = false; // do not update
                 }
             }//end if compatibility test
 
             // Kalman gain
-            Matrix3d K = sig * H.transpose() * Qi;
+            Matrix6d K = sig * H.transpose() * Qi;
 
             // Update landmark state
             if (is_compatible){
-                lm->sigma = lm->sigma - K * H * sig;
-                lm->mu = lm->mu + K * diff;
+                lm->covar = sig - K * H * sig;
+
+                Vector6d s; s << lm->state.xyz(), lm->state.rpy();
+                s = s + K * diff;
+
+                lm->state = Pose3D(s.head<3>(), s.tail<3>());
             }
 
             // Calculate weight (or likelihood)
