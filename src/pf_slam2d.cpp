@@ -182,7 +182,7 @@ bool lama::PFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Pose2D& odo
 
     current_surface_ = surface;
 
-    if (not has_first_scan){
+    if (not has_first_scan and do_mapping_){
         odom_ = odometry;
         timestamps_.push_back(timestamp);
 
@@ -289,17 +289,19 @@ bool lama::PFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Pose2D& odo
     // 5. Update maps
     local_timer.reset();
 
-    if (thread_pool_){
-        for (uint32_t i = 0; i < num_particles; ++i)
-            thread_pool_->enqueue([this, i](){
-                updateParticleMaps(&(particles_[current_particle_set_][i]));
-            });
+    if (do_mapping_){
+        if (thread_pool_){
+            for (uint32_t i = 0; i < num_particles; ++i)
+                thread_pool_->enqueue([this, i](){
+                        updateParticleMaps(&(particles_[current_particle_set_][i]));
+                        });
 
-        thread_pool_->wait();
-    } else {
-        for (uint32_t i = 0; i < num_particles; ++i)
-            updateParticleMaps(&particles_[current_particle_set_][i]);
-    }
+            thread_pool_->wait();
+        } else {
+            for (uint32_t i = 0; i < num_particles; ++i)
+                updateParticleMaps(&particles_[current_particle_set_][i]);
+        }// end if
+    }// end if (do_mapping_)
 
     if (summary){
         probeMTime(local_timer.elapsed());

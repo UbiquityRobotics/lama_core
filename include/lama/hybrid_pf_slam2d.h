@@ -258,6 +258,14 @@ public:
 
     void setPrior(const Pose2D& prior);
 
+    // Tell the slam process to do localization but not the mapping part.
+    inline void pauseMapping()
+    { do_mapping_ = false; }
+
+    // Tell the slam process to do both localization and mapping.
+    inline void resumeMapping()
+    { do_mapping_ = true; }
+
 private:
 
     StrategyPtr makeStrategy(const std::string& name, const VectorXd& parameters);
@@ -293,6 +301,9 @@ private:
     double acc_rot_;
     bool has_first_scan_;
     bool valid_surface_;
+
+    // Controls the execution of the mapping process
+    bool do_mapping_;
 
     double truncated_ray_;
     double truncated_range_;
