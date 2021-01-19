@@ -40,9 +40,9 @@ lama::Pose3D::Pose3D()
 lama::Pose3D::Pose3D(const double& x, const double& y, const double& z,
                const double& roll, const double& pitch, const double& yaw)
 {
-    Quaterniond tmp = AngleAxisd(yaw,   Vector3d::UnitZ()) *
+    Quaterniond tmp = AngleAxisd(roll,  Vector3d::UnitX()) *
                       AngleAxisd(pitch, Vector3d::UnitY()) *
-                      AngleAxisd(roll,  Vector3d::UnitX());
+                      AngleAxisd(yaw,   Vector3d::UnitZ());
 
     state.translation() = Vector3d(x,y,z);
     state.setQuaternion(tmp);
