@@ -56,8 +56,8 @@ struct Pose3D {
 
     virtual ~Pose3D();
 
-    Pose3D operator+(const Pose3D& other);
-    Pose3D operator-(const Pose3D& other);
+    Pose3D operator+(const Pose3D& other) const;
+    Pose3D operator-(const Pose3D& other) const;
 
     Vector3d operator*(const Vector3d& point);
 

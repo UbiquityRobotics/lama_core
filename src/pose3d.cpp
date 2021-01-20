@@ -100,12 +100,12 @@ lama::Pose3D::Pose3D(const SE3d& se3)
 lama::Pose3D::~Pose3D()
 {}
 
-lama::Pose3D lama::Pose3D::operator+(const Pose3D& other)
+lama::Pose3D lama::Pose3D::operator+(const Pose3D& other) const
 {
     return Pose3D(state * other.state);
 }
 
-lama::Pose3D lama::Pose3D::operator-(const Pose3D& other)
+lama::Pose3D lama::Pose3D::operator-(const Pose3D& other) const
 {
     return Pose3D(state.inverse() * other.state);
 }
