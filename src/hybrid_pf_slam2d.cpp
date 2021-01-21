@@ -48,26 +48,6 @@
 
 #include "lama/sdm/export.h"
 
-static double normalize(double z)
-{
-    return std::atan2(std::sin(z),std::cos(z));
-}
-
-static double angle_diff(double a, double b)
-{
-    double d1, d2;
-    a = normalize(a);
-    b = normalize(b);
-    d1 = a-b;
-    d2 = 2*M_PI - std::fabs(d1);
-    if(d1 > 0)
-        d2 *= -1.0;
-    if(std::fabs(d1) < std::fabs(d2))
-        return(d1);
-    else
-        return(d2);
-}
-
 std::string lama::HybridPFSlam2D::Summary::report() const
 {
     std::string report = format("\n LaMa PF Slam2D - Report\n"
@@ -632,15 +612,10 @@ void lama::HybridPFSlam2D::updateParticleLandmarks(Particle* particle, const Dyn
             Matrix6d Qi = Q.inverse();
 
             // inovation
-            auto hmm = h - landmark.measurement;
-            Vector6d a; a << h.xyz(), h.rpy();
-            Vector6d b = landmark.measurement;
-
+            auto inov = h - landmark.measurement;
             Vector6d diff;
-            diff << b.head<3>() - a.head<3>(),
-                    angle_diff(b(3), a(3)),
-                    angle_diff(b(4), a(4)),
-                    angle_diff(b(5), a(5));
+            diff << landmark.measurement.head<3>() - h.xyz(),
+                    inov.state.so3().log();
 
             // Compatibility test with the Mahalanobis distance.
             bool is_compatible = true;
@@ -659,10 +634,9 @@ void lama::HybridPFSlam2D::updateParticleLandmarks(Particle* particle, const Dyn
             if (is_compatible){
                 lm->covar = sig - K * H * sig;
 
-                Vector6d s; s << lm->state.xyz(), lm->state.rpy();
-                s = s + K * diff;
-
-                lm->state = Pose3D(s.head<3>(), s.tail<3>());
+                Vector6d s = K * diff;
+                lm->state.state.translation() += s.head<3>();
+                lm->state.state.so3() = lm->state.state.so3() * SO3d::exp(s.tail<3>());
             }
 
             // Calculate weight (or likelihood)
