@@ -89,3 +89,24 @@ uint32_t lama::KLDSampling::resample_limit(const Array<double, 3>& sample)
 
     return kld_samples;
 }
+
+uint32_t lama::KLDSampling::resample_limit(uint32_t k)
+{
+    if (cache[k-1] > 0)
+        return cache[k-1];
+
+    if (k > 2){
+        double a = 1.0;
+        double b = 2.0 / (9.0 * ((double) (k-1)));
+        double c = std::sqrt(2.0 / (9.0 * ((double)(k-1)))) * pop_z;
+        double x = a - b + c;
+
+        uint32_t n = (uint32_t) std::ceil((k-1) / (2.0 * pop_error) * x * x * x);
+
+        n = std::min(std::max(n, samples_min), samples_max);
+        if (n > kld_samples)
+            kld_samples = n;
+    }// end if (support_samples > 2)
+
+    return kld_samples;
+}
