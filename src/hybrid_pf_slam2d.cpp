@@ -718,7 +718,7 @@ void lama::HybridPFSlam2D::resample(bool reset_weight)
     particles_[ps].reserve(options_.max_particles);
 
     kld_.reset();
-    kld_.samples_max = valid_surface_ ? options_.particles : options_.max_particles;
+    kdtree_.reset(kld_.samples_max);
     for (size_t i = 0; i < kld_.samples_max; ++i){
 
         double r = random::uniform();
