@@ -81,6 +81,16 @@ void lama::Solver::solve(Problem& problem, MatrixXd* cov)
 
         // 3. do optimization step
         h = strategy->step(r, J);
+
+        // We can stop the optimization if h is zero
+        // and a stop criteria has been reached
+        if (h.isZero() and strategy->stop())
+            break;
+
+        // Make sure the step if finite
+        if (not h.allFinite())
+            break;
+
         problem.update(h);
 
         // 4. verify step validity
