@@ -47,9 +47,9 @@ void lama::KDTree::reset(int32_t max_size)
     num_nodes = 0;
     num_leafs = 0;
     num_clusters = 0;
-    max_nodes = max_size;
+    max_nodes = 3*max_size;
 
-    nodes.resize(max_size);
+    nodes.resize(max_nodes);
     root = -1;
 }
 
