@@ -158,6 +158,14 @@ public:
     inline void saveDistImage(const std::string& name) const
     { sdm::export_to_png(*distance_map_, name); }
 
+    // Tell the slam process to do localization but not the mapping part.
+    inline void pauseMapping()
+    { do_mapping_ = false; }
+
+    // Tell the slam process to do both localization and mapping.
+    inline void resumeMapping()
+    { do_mapping_ = true; }
+
 private:
 
     StrategyPtr makeStrategy(const std::string& name, const VectorXd& parameters);
@@ -177,6 +185,9 @@ private:
     double trans_thresh_;
     double rot_thresh_;
     bool has_first_scan;
+
+    // Controls the execution of the mapping process
+    bool do_mapping_;
 
     uint32_t number_of_proccessed_cells_;
     double truncated_ray_;

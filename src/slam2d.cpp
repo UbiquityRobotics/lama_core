@@ -108,6 +108,7 @@ lama::Slam2D::Slam2D(const Options& options)
     rot_thresh_   = options.rot_thresh;
 
     has_first_scan = false;
+    do_mapping_ = true;
     number_of_proccessed_cells_ = 0;
     truncated_ray_ = options.truncated_ray;
     truncated_range_ = options.truncated_range;
@@ -141,7 +142,7 @@ bool lama::Slam2D::update(const PointCloudXYZ::Ptr& surface, const Pose2D& odome
 {
     Timer timer(true);
 
-    if (not has_first_scan){
+    if (not has_first_scan and do_mapping_){
         odom_ = odometry;
         updateMaps(surface);
 
@@ -181,7 +182,8 @@ bool lama::Slam2D::update(const PointCloudXYZ::Ptr& surface, const Pose2D& odome
 
     // 3. Update maps
     Timer time_mapping(true);
-    updateMaps(surface);
+    if (do_mapping_)
+        updateMaps(surface);
 
     if (summary){
         probeMTime(time_mapping.elapsed());
