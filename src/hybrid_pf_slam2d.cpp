@@ -338,18 +338,20 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
     // 5. Update maps
     local_timer.reset();
 
-    if (thread_pool_){
-        for (uint32_t i = 0; i < num_particles; ++i)
-            thread_pool_->enqueue([this, i](){
-                updateParticleMaps(&(particles_[current_particle_set_][i]));
-            });
+    if (do_mapping_){
+        if (thread_pool_){
+            for (uint32_t i = 0; i < num_particles; ++i)
+                thread_pool_->enqueue([this, i](){
+                    updateParticleMaps(&(particles_[current_particle_set_][i]));
+                });
 
-        thread_pool_->wait();
-    } else {
-        for (uint32_t i = 0; i < num_particles; ++i){
-            updateParticleMaps(&particles_[current_particle_set_][i]);
-        }
-    }
+            thread_pool_->wait();
+        } else {
+            for (uint32_t i = 0; i < num_particles; ++i){
+                updateParticleMaps(&particles_[current_particle_set_][i]);
+            }
+        }// end if
+    }// end if (do_mapping_)
 
     if (summary){
         probeMTime(local_timer.elapsed());
