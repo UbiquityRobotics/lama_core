@@ -198,6 +198,24 @@ lama::Pose2D lama::LandmarkPFSlam2D::getPose() const
     return clusters_[idx].pose;
 }
 
+Eigen::Matrix3d lama::LandmarkPFSlam2D::getCovar() const
+{
+    if (clusters_.size() == 0){
+        Matrix3d covar = Matrix3d::Identity() * 999;
+        return covar;
+    }
+
+    double best = clusters_[0].weight;
+    size_t idx  = 0;
+    for (size_t i = 1; i < clusters_.size(); ++i)
+        if (clusters_[i].weight > best){
+            best = clusters_[i].weight;
+            idx = i;
+        }
+
+    return clusters_[idx].covar;
+}
+
 void lama::LandmarkPFSlam2D::drawFromMotion(const Pose2D& delta, const Pose2D& old_pose, Pose2D& pose)
 {
     double sigma, x, y, yaw;

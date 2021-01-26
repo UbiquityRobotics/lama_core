@@ -240,6 +240,7 @@ public:
     size_t getBestParticleIdx() const;
 
     Pose2D getPose() const;
+    Matrix3d getCovar() const;
 
     inline const std::deque<double>& getTimestamps() const
     { return timestamps_; }

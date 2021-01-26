@@ -142,6 +142,8 @@ public:
     // Get the pose of the best particle.
     Pose2D getPose() const;
 
+    Matrix3d getCovar() const;
+
     inline const std::vector<Particle>& getParticles() const
     { return particles_[current_particle_set_]; }
 

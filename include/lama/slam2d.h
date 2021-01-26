@@ -146,6 +146,9 @@ public:
     inline Pose2D getPose() const
     { return pose_; }
 
+    inline const Matrix3d& getCovar() const
+    { return covar_; }
+
     const FrequencyOccupancyMap* getOccupancyMap() const
     { return occupancy_map_; }
 
@@ -181,6 +184,7 @@ private:
 
     Pose2D odom_;
     Pose2D pose_;
+    Matrix3d covar_;
 
     double trans_thresh_;
     double rot_thresh_;

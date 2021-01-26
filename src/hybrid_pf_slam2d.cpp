@@ -347,6 +347,8 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
     local_timer.reset();
 
     if (do_mapping_){
+        // the number of particles may have change
+        num_particles = particles_[current_particle_set_].size();
         if (thread_pool_){
             for (uint32_t i = 0; i < num_particles; ++i)
                 thread_pool_->enqueue([this, i](){
@@ -403,6 +405,24 @@ lama::Pose2D lama::HybridPFSlam2D::getPose() const
         }
 
     return clusters_[idx].pose;
+}
+
+Eigen::Matrix3d lama::HybridPFSlam2D::getCovar() const
+{
+    if (clusters_.size() == 0){
+        Matrix3d covar = Matrix3d::Identity() * 999;
+        return covar;
+    }
+
+    double best = clusters_[0].weight;
+    size_t idx  = 0;
+    for (size_t i = 1; i < clusters_.size(); ++i)
+        if (clusters_[i].weight > best){
+            best = clusters_[i].weight;
+            idx = i;
+        }
+
+    return clusters_[idx].covar;
 }
 
 void lama::HybridPFSlam2D::saveOccImage(const std::string& name) const
