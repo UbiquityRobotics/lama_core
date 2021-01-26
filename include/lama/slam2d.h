@@ -166,6 +166,11 @@ public:
     inline void resumeMapping()
     { do_mapping_ = true; }
 
+    // Switch to a new occupancy map.
+    // The current maps (occupancy and distance) will be deleted.
+    // We also assume ownership of the map object.
+    bool setOccupancyMap(FrequencyOccupancyMap* map);
+
 private:
 
     StrategyPtr makeStrategy(const std::string& name, const VectorXd& parameters);
