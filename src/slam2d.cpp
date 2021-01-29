@@ -222,6 +222,30 @@ void lama::Slam2D::useCompression(bool compression, const std::string& algorithm
     occupancy_map_->useCompression(compression, 60, algorithm);
 }
 
+bool lama::Slam2D::setOccupancyMap(FrequencyOccupancyMap* map)
+{
+    if (map == nullptr)
+        return false;
+
+    double l2_max = distance_map_->maxDistance();
+
+    delete occupancy_map_;
+    delete distance_map_;
+
+    occupancy_map_ = map;
+    distance_map_ = new DynamicDistanceMap(map->resolution, map->patch_length);
+    distance_map_->setMaxDistance(l2_max);
+
+    map->visit_all_cells([this, &map](auto& coords){
+        if (map->isOccupied(coords))
+            this->distance_map_->addObstacle(coords);
+    });
+
+    distance_map_->update();
+    return true;
+}
+
+
 lama::Slam2D::StrategyPtr lama::Slam2D::makeStrategy(const std::string& name, const VectorXd& parameters)
 {
     if (name == "lm"){
