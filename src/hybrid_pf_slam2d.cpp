@@ -275,6 +275,8 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
             normalize();
             resample(false);
 
+            clusterStats();
+
             acc_trans_ = options_.trans_thresh;
             acc_rot_   = options_.rot_thresh;
 
@@ -333,12 +335,20 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
 
         if (summary)
             probeRTime(local_timer.elapsed());
+    } else {
+        kdtree_.reset(num_particles);
+        for (auto& p : particles_[current_particle_set_])
+            kdtree_.insert(p.pose);
     }
+
+    clusterStats();
 
     // 5. Update maps
     local_timer.reset();
 
     if (do_mapping_){
+        // the number of particles may have change
+        num_particles = particles_[current_particle_set_].size();
         if (thread_pool_){
             for (uint32_t i = 0; i < num_particles; ++i)
                 thread_pool_->enqueue([this, i](){
@@ -383,8 +393,36 @@ size_t lama::HybridPFSlam2D::getBestParticleIdx() const
 
 lama::Pose2D lama::HybridPFSlam2D::getPose() const
 {
-    size_t pidx = getBestParticleIdx();
-    return particles_[current_particle_set_][pidx].pose;
+    if (clusters_.size() == 0)
+        return particles_[current_particle_set_][0].pose;
+
+    double best = clusters_[0].weight;
+    size_t idx  = 0;
+    for (size_t i = 1; i < clusters_.size(); ++i)
+        if (clusters_[i].weight > best){
+            best = clusters_[i].weight;
+            idx = i;
+        }
+
+    return clusters_[idx].pose;
+}
+
+Eigen::Matrix3d lama::HybridPFSlam2D::getCovar() const
+{
+    if (clusters_.size() == 0){
+        Matrix3d covar = Matrix3d::Identity() * 999;
+        return covar;
+    }
+
+    double best = clusters_[0].weight;
+    size_t idx  = 0;
+    for (size_t i = 1; i < clusters_.size(); ++i)
+        if (clusters_[i].weight > best){
+            best = clusters_[i].weight;
+            idx = i;
+        }
+
+    return clusters_[idx].covar;
 }
 
 void lama::HybridPFSlam2D::saveOccImage(const std::string& name) const
@@ -701,8 +739,8 @@ void lama::HybridPFSlam2D::resample(bool reset_weight)
     uint8_t ps = 1 - current_particle_set_;
     particles_[ps].reserve(options_.max_particles);
 
-    uint32_t kld_samples = 0;
     kld_.reset();
+    kdtree_.reset(kld_.samples_max);
     for (size_t i = 0; i < kld_.samples_max; ++i){
 
         double r = random::uniform();
@@ -714,20 +752,76 @@ void lama::HybridPFSlam2D::resample(bool reset_weight)
         particles_[ps].emplace_back( Particle{} );
         particles_[ps].back() = particles_[current_particle_set_][idx];
 
-        if (reset_weight)
+        if (reset_weight){
             particles_[ps].back().weight = 0.0;
+            particles_[ps].back().lm_weight = 0.0;
+        }
 
         particles_[ps].back().dm  = DynamicDistanceMapPtr(new DynamicDistanceMap(*(particles_[current_particle_set_][idx].dm)));
         particles_[ps].back().occ = FrequencyOccupancyMapPtr(new FrequencyOccupancyMap(*(particles_[current_particle_set_][idx].occ)));
         particles_[ps].back().lm = SimpleLandmark2DMapPtr(new SimpleLandmark2DMap(*(particles_[current_particle_set_][idx].lm)));
 
         auto& pose = particles_[ps].back().pose;
-        kld_samples = kld_.resample_limit( {pose.x(), pose.y(), pose.rotation()} );
+
+        kdtree_.insert(pose);
+        auto kld_samples = kld_.resample_limit(kdtree_.num_leafs);
 
         if (particles_[ps].size() >= kld_samples) break;
     }
 
     particles_[current_particle_set_].clear();
     current_particle_set_ = ps;
+}
+
+void lama::HybridPFSlam2D::clusterStats()
+{
+    kdtree_.cluster();
+
+    clusters_.clear();
+    clusters_.resize(kdtree_.num_clusters);
+
+    for (auto& particle : particles_[current_particle_set_]){
+
+        auto cidx = kdtree_.getCluster(particle.pose);
+        if ( cidx == -1 )
+            continue;
+
+        Cluster& cluster = clusters_[cidx];
+
+        // accumulate the weight
+        cluster.weight += particle.normalized_weight;
+
+        // compute mean
+        cluster.m[0] += particle.normalized_weight * particle.pose.x();
+        cluster.m[1] += particle.normalized_weight * particle.pose.y();
+        cluster.m[2] += particle.normalized_weight * std::cos(particle.pose.rotation());
+        cluster.m[3] += particle.normalized_weight * std::sin(particle.pose.rotation());
+
+        // compute covar of linear compomenets
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j)
+                cluster.c(i,j) += particle.normalized_weight * particle.pose.xyr()(i) * particle.pose.xyr()(j);
+
+    }// end for
+
+    // Normalize each cluster
+    for (auto& cluster : clusters_){
+
+        // First the mean
+        Vector3d mean;
+        mean << cluster.m[0] / cluster.weight,
+                cluster.m[1] / cluster.weight,
+                std::atan2(cluster.m[3], cluster.m[2]);
+
+        cluster.pose = Pose2D(mean);
+
+        // Now the covariance for the linear components
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j)
+                cluster.covar(i,j) = cluster.c(i,j) / cluster.weight - mean(i) * mean(j);
+
+        // Circular covariance
+        cluster.covar(2,2) = -2 * std::log(cluster.m.tail<2>().norm());
+    }
 }
 

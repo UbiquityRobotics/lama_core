@@ -52,6 +52,7 @@ set(lama_SOURCES
     landmark_pf_slam2d.cpp
     hybrid_pf_slam2d.cpp
     kld_sampling.cpp
+    kdtree.cpp
 )
 
 add_library(${PROJECT_NAME} ${lama_SOURCES})

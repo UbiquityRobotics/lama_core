@@ -32,6 +32,8 @@
  *
  */
 
+#pragma once
+
 #include "types.h"
 
 namespace lama {
@@ -79,6 +81,9 @@ struct KLDSampling {
 
     // Calculate the resample limit, i.e. the adequate number of samples).
     uint32_t resample_limit(const Array<double, 3>& sample);
+
+    // Calculate the resample limit given the number of bins k
+    uint32_t resample_limit(uint32_t k);
 
 };
 

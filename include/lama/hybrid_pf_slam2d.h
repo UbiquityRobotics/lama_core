@@ -44,6 +44,7 @@
 #include "sdm/dynamic_distance_map.h"
 #include "sdm/frequency_occupancy_map.h"
 
+#include "lama/kdtree.h"
 #include "lama/kld_sampling.h"
 #include "lama/simple_landmark2d_map.h"
 
@@ -95,6 +96,25 @@ public:
         // The landmark map.
         SimpleLandmark2DMapPtr lm;
 
+    };
+
+    struct Cluster {
+        EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+        // Number of samples in the cluster
+        int32_t count = 0;
+        // The weight of the cluster
+        double weight = 0.0;
+
+        // Pose of the cluster
+        Pose2D pose;
+
+        // Covariance of the pose
+        Matrix3d covar = Matrix3d::Zero();
+
+        // Workspace used to calculate the covariance
+        Vector4d m = Vector4d::Zero();
+        Matrix2d c = Matrix2d::Zero();
     };
 
     struct Summary {
@@ -220,6 +240,7 @@ public:
     size_t getBestParticleIdx() const;
 
     Pose2D getPose() const;
+    Matrix3d getCovar() const;
 
     inline const std::deque<double>& getTimestamps() const
     { return timestamps_; }
@@ -286,12 +307,18 @@ private:
     void normalize();
     void resample(bool reset_weight = false);
 
+    void clusterStats();
+
 private:
     Options options_;
     SolverOptions solver_options_;
 
     std::vector<Particle> particles_[2];
     uint8_t current_particle_set_;
+
+    DynamicArray<Cluster> clusters_;
+
+    KDTree      kdtree_;
     KLDSampling kld_;
 
     Pose2D odom_;

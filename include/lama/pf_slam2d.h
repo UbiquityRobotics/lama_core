@@ -40,6 +40,8 @@
 #include "pose2d.h"
 #include "nlls/solver.h"
 
+#include "lama/kdtree.h"
+#include "lama/kld_sampling.h"
 #include "sdm/dynamic_distance_map.h"
 #include "sdm/frequency_occupancy_map.h"
 
@@ -84,6 +86,26 @@ public:
         FrequencyOccupancyMapPtr occ;
 
     };
+
+    struct Cluster {
+        EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+        // Number of samples in the cluster
+        int32_t count = 0;
+        // The weight of the cluster
+        double weight = 0.0;
+
+        // Pose of the cluster
+        Pose2D pose;
+
+        // Covariance of the pose
+        Matrix3d covar = Matrix3d::Zero();
+
+        // Workspace used to calculate the covariance
+        Vector4d m = Vector4d::Zero();
+        Matrix2d c = Matrix2d::Zero();
+    };
+
 
     struct Summary {
         /// When it happend.
@@ -133,7 +155,9 @@ public:
         Options(){}
 
         /// The number of particles to use
-        uint32_t particles;
+        uint32_t particles = 20;
+        /// The number of maximum particles to use
+        uint32_t max_particles = 40;
         /// How much the rotation affects rotation.
         double srr = 0.1;
         /// How much the translation affects rotation.
@@ -201,6 +225,7 @@ public:
     size_t getBestParticleIdx() const;
 
     Pose2D getPose() const;
+    Matrix3d getCovar() const;
 
     inline const std::deque<double>& getTimestamps() const
     { return timestamps_; }
@@ -257,12 +282,19 @@ private:
     void normalize();
     void resample();
 
+    void clusterStats();
+
 private:
     Options options_;
     SolverOptions solver_options_;
 
     std::vector<Particle> particles_[2];
     uint8_t current_particle_set_;
+
+    DynamicArray<Cluster> clusters_;
+
+    KDTree      kdtree_;
+    KLDSampling kld_;
 
     Pose2D odom_;
     Pose2D pose_;

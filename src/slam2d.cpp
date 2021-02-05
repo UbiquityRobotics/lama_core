@@ -116,6 +116,8 @@ lama::Slam2D::Slam2D(const Options& options)
     if (options.create_summary)
         summary = new Summary();
 
+    // initialize covariance with high numbers
+    covar_ = Matrix3d::Identity() * 999;
 }
 
 lama::Slam2D::~Slam2D()
@@ -174,7 +176,10 @@ bool lama::Slam2D::update(const PointCloudXYZ::Ptr& surface, const Pose2D& odome
     Timer time_solving(true);
 
     MatchSurface2D match_surface(distance_map_, surface, pose_.state );
-    Solve(solver_options_, match_surface, 0);
+
+    MatrixXd cov;
+    Solve(solver_options_, match_surface, &cov);
+    covar_ = cov;
 
     pose_.state = match_surface.getState();
     if (summary)
