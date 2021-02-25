@@ -287,6 +287,8 @@ public:
     inline void resumeMapping()
     { do_mapping_ = true; }
 
+    bool setMaps(FrequencyOccupancyMap* map, SimpleLandmark2DMap* lm_map);
+
 private:
 
     StrategyPtr makeStrategy(const std::string& name, const VectorXd& parameters);
