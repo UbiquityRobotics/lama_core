@@ -620,7 +620,7 @@ void lama::HybridPFSlam2D::updateParticleLandmarks(Particle* particle, const Dyn
         uint32_t id = landmark.id;
         auto* lm = particle->lm->get(id);
 
-        if ( lm == nullptr ){
+        if ( do_mapping_ and (lm == nullptr) ){
             // This is the first time the landmarks is observed.
             lm = particle->lm->alloc(id);
 
@@ -669,7 +669,7 @@ void lama::HybridPFSlam2D::updateParticleLandmarks(Particle* particle, const Dyn
             Matrix6d K = sig * H.transpose() * Qi;
 
             // Update landmark state
-            if (is_compatible){
+            if (do_mapping_ and is_compatible){
                 lm->covar = sig - K * H * sig;
 
                 Vector6d s = K * diff;
