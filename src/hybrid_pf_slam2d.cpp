@@ -679,7 +679,7 @@ void lama::HybridPFSlam2D::updateParticleLandmarks(Particle* particle, const Dyn
 
             Matrix6d Hi = H.inverse();
             lm->covar = Hi * landmark.covar * Hi.transpose();
-        } else {
+        } else if ( lm != nullptr ) {
 
             // abbreviation
             Matrix6d& sig = lm->covar;
