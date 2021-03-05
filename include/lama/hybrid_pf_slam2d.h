@@ -279,6 +279,8 @@ public:
 
     void setPrior(const Pose2D& prior);
 
+    void setPose(const Pose2D& prior);
+
     // Tell the slam process to do localization but not the mapping part.
     inline void pauseMapping()
     { do_mapping_ = false; }

@@ -180,6 +180,28 @@ void lama::HybridPFSlam2D::setPrior(const Pose2D& prior)
     pose_ = prior;
 }
 
+void lama::HybridPFSlam2D::setPose(const Pose2D& initialpose)
+{   
+    float dx = initialpose.x() - pose_.x();
+    float dy = initialpose.y() - pose_.y();
+    float dr = initialpose.rotation() - pose_.rotation();
+
+    Pose2D deltapose = lama::Pose2D(dx, dy, dr);
+    pose_ = initialpose;
+
+    for (size_t i = 0; i <= current_particle_set_; ++i){
+        const size_t num_particles = particles_[i].size();
+        for (size_t j = 0; j < num_particles; ++j){
+            float x = particles_[i][j].pose.x() + deltapose.x();
+            float y = particles_[i][j].pose.y() + deltapose.y();
+            float r = particles_[i][j].pose.rotation() + deltapose.rotation();
+            particles_[i][j].pose = lama::Pose2D(x, y, r);
+        }
+    }
+
+
+}
+
 uint64_t lama::HybridPFSlam2D::getMemoryUsage() const
 {
     uint64_t total = 0;
