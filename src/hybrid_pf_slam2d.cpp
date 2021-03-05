@@ -115,6 +115,7 @@ lama::HybridPFSlam2D::HybridPFSlam2D(const Options& options)
 
     neff_ = options.particles;
     has_first_scan_ = false;
+    do_mapping_ = true;
     truncated_ray_ = options.truncated_ray;
     truncated_range_ = options.truncated_range;
 
