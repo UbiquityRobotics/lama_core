@@ -473,6 +473,7 @@ bool lama::HybridPFSlam2D::setMaps(FrequencyOccupancyMap* map, SimpleLandmark2DM
         particles_[ps][i].lm  = SimpleLandmark2DMapPtr( new SimpleLandmark2DMap(*(particles_[ps][0].lm)) );
     }
 
+    particles_[current_particle_set_].clear();
     current_particle_set_ = ps;
     return true;
 }
