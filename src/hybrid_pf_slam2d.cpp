@@ -180,6 +180,21 @@ void lama::HybridPFSlam2D::setPrior(const Pose2D& prior)
     pose_ = prior;
 }
 
+void lama::HybridPFSlam2D::setPose(const Pose2D& initialpose)
+{
+    // Get the expected pose of the particle filter
+    Pose2D pose = getPose();
+    // We will not be applying the initialpose directly.
+    // To maintain the distribution of the filter we will be applying
+    // the offset between the current expected pose and the desired initialpose.
+    // This will effectively change the expected value to the initialpose.
+    Pose2D offset = pose - initialpose;
+
+    // Apply the offset to all particles.
+    for (auto& particle : particles_[current_particle_set_])
+        particle.pose += offset;
+}
+
 uint64_t lama::HybridPFSlam2D::getMemoryUsage() const
 {
     uint64_t total = 0;
