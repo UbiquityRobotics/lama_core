@@ -115,6 +115,7 @@ lama::HybridPFSlam2D::HybridPFSlam2D(const Options& options)
 
     neff_ = options.particles;
     has_first_scan_ = false;
+    do_mapping_ = true;
     truncated_ray_ = options.truncated_ray;
     truncated_range_ = options.truncated_range;
 
@@ -177,6 +178,21 @@ lama::HybridPFSlam2D::~HybridPFSlam2D()
 void lama::HybridPFSlam2D::setPrior(const Pose2D& prior)
 {
     pose_ = prior;
+}
+
+void lama::HybridPFSlam2D::setPose(const Pose2D& initialpose)
+{
+    // Get the expected pose of the particle filter
+    Pose2D pose = getPose();
+    // We will not be applying the initialpose directly.
+    // To maintain the distribution of the filter we will be applying
+    // the offset between the current expected pose and the desired initialpose.
+    // This will effectively change the expected value to the initialpose.
+    Pose2D offset = pose - initialpose;
+
+    // Apply the offset to all particles.
+    for (auto& particle : particles_[current_particle_set_])
+        particle.pose += offset;
 }
 
 uint64_t lama::HybridPFSlam2D::getMemoryUsage() const
@@ -431,6 +447,52 @@ void lama::HybridPFSlam2D::saveOccImage(const std::string& name) const
     sdm::export_to_png(*particles_[current_particle_set_][pidx].occ, name);
 }
 
+bool lama::HybridPFSlam2D::setMaps(FrequencyOccupancyMap* map, SimpleLandmark2DMap* lm_map)
+{
+    if (map == nullptr or lm_map == nullptr)
+        return false;
+
+    const uint32_t num_particles = particles_[current_particle_set_].size();
+    uint8_t ps = 1 - current_particle_set_;
+    particles_[ps].resize(num_particles);
+
+    // Make all particle have the same map
+    particles_[ps][0].poses.push_back(pose_);
+    particles_[ps][0].pose = pose_;
+
+    particles_[ps][0].weight     = 0.0;
+    particles_[ps][0].weight_sum = 0.0;
+    particles_[ps][0].dm = DynamicDistanceMapPtr(new DynamicDistanceMap(options_.resolution, options_.patch_size));
+    particles_[ps][0].dm->setMaxDistance(options_.l2_max);
+    particles_[ps][0].dm->useCompression(options_.use_compression,  options_.cache_size, options_.calgorithm);
+
+    map->visit_all_cells([&](auto& coords){
+        if (map->isOccupied(coords))
+            particles_[ps][0].dm->addObstacle(coords);
+    });
+    particles_[ps][0].dm->update();
+
+    particles_[ps][0].occ = FrequencyOccupancyMapPtr(map);
+    //particles_[ps][0].occ->useCompression(options_.use_compression, options_.cache_size, options_.calgorithm);
+    particles_[ps][0].lm = SimpleLandmark2DMapPtr(lm_map);
+
+    for (uint32_t i = 1; i < num_particles; ++i){
+        particles_[ps][i].poses.push_back(pose_);
+        particles_[ps][i].pose = pose_;
+
+        particles_[ps][i].weight     = 0.0;
+        particles_[ps][i].weight_sum = 0.0;
+
+        particles_[ps][i].occ = FrequencyOccupancyMapPtr(new FrequencyOccupancyMap(*particles_[ps][0].occ));
+        particles_[ps][i].dm  = DynamicDistanceMapPtr(new DynamicDistanceMap(*particles_[ps][0].dm));
+        particles_[ps][i].lm  = SimpleLandmark2DMapPtr( new SimpleLandmark2DMap(*(particles_[ps][0].lm)) );
+    }
+
+    particles_[current_particle_set_].clear();
+    current_particle_set_ = ps;
+    return true;
+}
+
 lama::HybridPFSlam2D::StrategyPtr lama::HybridPFSlam2D::makeStrategy(const std::string& name, const VectorXd& parameters)
 {
     if (name == "gn"){
@@ -620,7 +682,7 @@ void lama::HybridPFSlam2D::updateParticleLandmarks(Particle* particle, const Dyn
         uint32_t id = landmark.id;
         auto* lm = particle->lm->get(id);
 
-        if ( lm == nullptr ){
+        if ( do_mapping_ and (lm == nullptr) ){
             // This is the first time the landmarks is observed.
             lm = particle->lm->alloc(id);
 
@@ -634,7 +696,7 @@ void lama::HybridPFSlam2D::updateParticleLandmarks(Particle* particle, const Dyn
 
             Matrix6d Hi = H.inverse();
             lm->covar = Hi * landmark.covar * Hi.transpose();
-        } else {
+        } else if ( lm != nullptr ) {
 
             // abbreviation
             Matrix6d& sig = lm->covar;
@@ -669,7 +731,7 @@ void lama::HybridPFSlam2D::updateParticleLandmarks(Particle* particle, const Dyn
             Matrix6d K = sig * H.transpose() * Qi;
 
             // Update landmark state
-            if (is_compatible){
+            if (do_mapping_ and is_compatible){
                 lm->covar = sig - K * H * sig;
 
                 Vector6d s = K * diff;

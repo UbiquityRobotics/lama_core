@@ -279,6 +279,8 @@ public:
 
     void setPrior(const Pose2D& prior);
 
+    void setPose(const Pose2D& prior);
+
     // Tell the slam process to do localization but not the mapping part.
     inline void pauseMapping()
     { do_mapping_ = false; }
@@ -286,6 +288,8 @@ public:
     // Tell the slam process to do both localization and mapping.
     inline void resumeMapping()
     { do_mapping_ = true; }
+
+    bool setMaps(FrequencyOccupancyMap* map, SimpleLandmark2DMap* lm_map);
 
 private:
 
