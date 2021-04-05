@@ -220,7 +220,7 @@ public:
         /// Do compatibility test* using the Mahalanobis distance.
         bool do_compatibility_test = true;
         /// number of particles used for global localization.
-        uint32_t gloc_particles = 3000;
+        int32_t gloc_particles = 3000;
         /// Save data to create an execution summary.
         bool create_summary = false;
     };
