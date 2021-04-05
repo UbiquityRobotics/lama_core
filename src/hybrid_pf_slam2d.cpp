@@ -167,6 +167,11 @@ lama::HybridPFSlam2D::HybridPFSlam2D(const Options& options)
         summary = new Summary();
 
     kld_.init(options.particles, options_.max_particles, 0.04);
+
+    // Global localization stuff
+    do_global_localization_ = false;
+    gloc_particles_ = options.gloc_particles;
+    gloc_thresh_ = options.gloc_thresh;
 }
 
 lama::HybridPFSlam2D::~HybridPFSlam2D()
@@ -270,14 +275,6 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
     for (uint32_t i = 0; i < num_particles; ++i)
         drawFromMotion(odelta, particles_[current_particle_set_][i].pose, particles_[current_particle_set_][i].pose);
 
-    // only continue if the necessary motion was gathered.
-    acc_trans_ += odelta.xy().norm();
-    acc_rot_   += std::fabs(odelta.rotation());
-    if (acc_trans_ <= options_.trans_thresh &&
-        acc_rot_ <= options_.rot_thresh){
-        return false;
-    }
-
     // Do we have data??
     bool is_valid = surface->points.size() >= 50;
     if (!is_valid and landmarks.size() == 0){
@@ -293,6 +290,7 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
 
             clusterStats();
 
+            // FORCE AN UPDATE
             acc_trans_ = options_.trans_thresh;
             acc_rot_   = options_.rot_thresh;
 
@@ -302,6 +300,23 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
         return false;
     }
 
+    // Do global localization if triggered.
+    if (do_global_localization_){
+        globalLocalization(surface, landmarks);
+        do_global_localization_ = false;
+
+        // FORCE AN UPDATE
+        acc_trans_ = options_.trans_thresh;
+        acc_rot_   = options_.rot_thresh;
+    }
+
+    // only continue if the necessary motion was gathered.
+    acc_trans_ += odelta.xy().norm();
+    acc_rot_   += std::fabs(odelta.rotation());
+    if (acc_trans_ <= options_.trans_thresh &&
+        acc_rot_ <= options_.rot_thresh){
+        return false;
+    }
 
     acc_trans_ = 0;
     acc_rot_   = 0;
@@ -492,6 +507,102 @@ bool lama::HybridPFSlam2D::setMaps(FrequencyOccupancyMap* map, SimpleLandmark2DM
     current_particle_set_ = ps;
     return true;
 }
+
+bool lama::HybridPFSlam2D::globalLocalization(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark>& landmarks)
+{
+    if (not has_first_scan_)
+        return false;
+
+    const size_t num_points = surface->points.size();
+
+    // Use the best occupancy map
+    auto occupancy_map = getOccupancyMap();
+    auto distance_map  = getDistanceMap();
+    auto landmark_map  = getLandmarkMap();
+
+    Vector3d min, max;
+    occupancy_map->bounds(min, max);
+
+    Vector3d diff = max - min;
+
+    Pose2D best_pose = getPose();
+    double best_likelihood = -std::numeric_limits<double>::max();
+
+    for (uint32_t i = 0; i < gloc_particles_; ++i){
+
+        double x, y, a;
+        int j;
+        for (j = 0; j < 1000; ++j){
+            x = min[0] + random::uniform() * diff[0];
+            y = min[1] + random::uniform() * diff[1];
+
+            if (not occupancy_map->isFree(Vector3d(x, y, 0.0)))
+                continue;
+
+            a = random::uniform() * 2 * M_PI - M_PI;
+            break;
+        }
+
+        if (j == 1000){
+            // We were unable to find free space.
+            // This prevents a infinite loop.
+            return false;
+        }
+
+        Pose2D p(x, y , a);
+        Pose3D p3(Vector3d(x, y, 0.0), a);
+
+        // calculate scan likelihood
+        Affine3d moving_tf = Translation3d(surface->sensor_origin_) * surface->sensor_orientation_;
+        Affine3d fixed_tf = Translation3d(Vector3d(x,y,0.0)) * AngleAxisd(a, Vector3d::UnitZ());
+
+        Affine3d tf = fixed_tf * moving_tf;
+
+        double likelihood = 0;
+        for (size_t i = 0; i < num_points; ++i){
+            Vector3d hit = tf * surface->points[i];
+            double dist = distance_map->distance(hit, 0);
+            likelihood += - (dist*dist) / options_.meas_sigma;
+        } // end for
+
+        // calculate landmark likelihood
+        for (const auto& landmark : landmarks){
+
+            uint32_t id = landmark.id;
+            auto lm = landmark_map->get(id);
+            if ( lm == nullptr ) continue;
+
+            // abbreviation
+            const Matrix6d& sig = lm->covar;
+
+            // Predicted landmark
+            auto h = p3 - lm->state;
+
+            Matrix6d H; H.setIdentity();
+            H.topLeftCorner<3,3>() = p3.state.rotationMatrix().transpose();
+
+            // Update landmark covariance
+            Matrix6d Q = H * sig * H.transpose() + landmark.covar;
+
+            // innovation
+            auto inov = h - landmark.measurement;
+            Vector6d diff;
+            diff << landmark.measurement.head<3>() - h.xyz(),
+                    inov.state.so3().log();
+
+            likelihood += -0.5 * diff.transpose() * Q.inverse() * diff;
+        }
+
+        if (likelihood < best_likelihood){
+            best_likelihood = likelihood;
+            best_pose = p;
+        }
+    } // end for
+
+    setPose(best_pose);
+    return true;
+}
+
 
 lama::HybridPFSlam2D::StrategyPtr lama::HybridPFSlam2D::makeStrategy(const std::string& name, const VectorXd& parameters)
 {
@@ -859,7 +970,7 @@ void lama::HybridPFSlam2D::clusterStats()
         cluster.m[2] += particle.normalized_weight * std::cos(particle.pose.rotation());
         cluster.m[3] += particle.normalized_weight * std::sin(particle.pose.rotation());
 
-        // compute covar of linear compomenets
+        // compute covar of linear components
         for (int i = 0; i < 2; ++i)
             for (int j = 0; j < 2; ++j)
                 cluster.c(i,j) += particle.normalized_weight * particle.pose.xyr()(i) * particle.pose.xyr()(j);
