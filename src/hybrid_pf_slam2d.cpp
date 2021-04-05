@@ -517,22 +517,22 @@ lama::HybridPFSlam2D::RobustCostPtr lama::HybridPFSlam2D::makeRobust(const std::
 void lama::HybridPFSlam2D::drawFromMotion(const Pose2D& delta, const Pose2D& old_pose, Pose2D& pose)
 {
     double sigma, x, y, yaw;
-    double sxy = 0.3 * options_.srr;
+    double sxy = 0.3 * options_.stt;
 
-    sigma = options_.srr * std::fabs(delta.x())   +
-            options_.str * std::fabs(delta.rotation()) +
+    sigma = options_.stt * std::fabs(delta.x())   +
+            options_.srt * std::fabs(delta.rotation()) +
             sxy * std::fabs(delta.y());
 
     x = delta.x() + random::normal(sigma);
 
-    sigma = options_.srr * std::fabs(delta.y())   +
-            options_.str * std::fabs(delta.rotation()) +
+    sigma = options_.stt * std::fabs(delta.y())   +
+            options_.srt * std::fabs(delta.rotation()) +
             sxy * std::fabs(delta.x());
 
     y = delta.y() + random::normal(sigma);
 
-    sigma = options_.stt * std::fabs(delta.rotation()) +
-            options_.srt * delta.xy().norm();
+    sigma = options_.srr * std::fabs(delta.rotation()) +
+            options_.str * delta.xy().norm();
 
     yaw = delta.rotation() + random::normal(sigma);
     yaw = std::fmod(yaw, 2*M_PI);
