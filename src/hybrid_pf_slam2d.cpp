@@ -171,7 +171,6 @@ lama::HybridPFSlam2D::HybridPFSlam2D(const Options& options)
     // Global localization stuff
     do_global_localization_ = false;
     gloc_particles_ = options.gloc_particles;
-    gloc_thresh_ = options.gloc_thresh;
 }
 
 lama::HybridPFSlam2D::~HybridPFSlam2D()

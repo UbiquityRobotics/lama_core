@@ -360,7 +360,6 @@ private:
 
     bool do_global_localization_;
     double gloc_particles_;
-    double gloc_thresh_;
 
     std::deque<double> timestamps_;
     PointCloudXYZ::Ptr current_surface_;
