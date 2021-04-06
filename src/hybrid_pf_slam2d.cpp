@@ -592,7 +592,7 @@ bool lama::HybridPFSlam2D::globalLocalization(const PointCloudXYZ::Ptr& surface,
             likelihood += -0.5 * diff.transpose() * Q.inverse() * diff;
         }
 
-        if (likelihood < best_likelihood){
+        if (likelihood > best_likelihood){
             best_likelihood = likelihood;
             best_pose = p;
         }
