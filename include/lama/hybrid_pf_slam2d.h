@@ -219,6 +219,8 @@ public:
         std::string calgorithm = "lz4";
         /// Do compatibility test* using the Mahalanobis distance.
         bool do_compatibility_test = true;
+        /// number of particles used for global localization.
+        int32_t gloc_particles = 3000;
         /// Save data to create an execution summary.
         bool create_summary = false;
     };
@@ -291,6 +293,9 @@ public:
 
     bool setMaps(FrequencyOccupancyMap* map, SimpleLandmark2DMap* lm_map);
 
+    inline void triggerGlobalLocalization()
+    { do_global_localization_ = true; }
+
 private:
 
     StrategyPtr makeStrategy(const std::string& name, const VectorXd& parameters);
@@ -312,6 +317,19 @@ private:
     void resample(bool reset_weight = false);
 
     void clusterStats();
+
+    // Do global localization.
+    //
+    // Usually, global localization with a particle filter is solved by uniformly distribute
+    // the particles over the map's free space, and, as the particle filter evolves, the particles
+    // will converge to the correct pose. This simply cannot be done for a SLAM algorithm.
+    // Instead of letting the filter converge, we use the pose of particle with the highest weight
+    // to set a new initial pose.
+    //
+    // WARNING: Calling this function does not guarantee to find the correct global pose. You may need
+    // to call this function more than once to find the correct pose. It is up to you to evaluate if the
+    // global pose is correct or not.
+    bool globalLocalization(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark>& landmarks);
 
 private:
     Options options_;
@@ -339,6 +357,9 @@ private:
     double truncated_ray_;
     double truncated_range_;
     double neff_;
+
+    bool do_global_localization_;
+    double gloc_particles_;
 
     std::deque<double> timestamps_;
     PointCloudXYZ::Ptr current_surface_;

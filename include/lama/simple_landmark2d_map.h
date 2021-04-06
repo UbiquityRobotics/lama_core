@@ -78,6 +78,15 @@ struct SimpleLandmark2DMap {
         return iter->second.operator->();
     }
 
+    inline const Landmark* get(uint32_t id) const
+    {
+        auto iter = landmarks.find(id);
+        if ( iter == landmarks.end() )
+            return nullptr;
+
+        return iter->second.operator->();
+    }
+
     // Allocate a new landmark.
     // Returns nullptr if the landmark already exists.
     inline Landmark* alloc(uint32_t id)
