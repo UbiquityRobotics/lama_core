@@ -115,6 +115,7 @@ lama::HybridPFSlam2D::HybridPFSlam2D(const Options& options)
 
     neff_ = options.particles;
     has_first_scan_ = false;
+    has_first_landmarks_ = false;
     do_mapping_ = true;
     truncated_ray_ = options.truncated_ray;
     truncated_range_ = options.truncated_range;
@@ -160,6 +161,8 @@ lama::HybridPFSlam2D::HybridPFSlam2D(const Options& options)
         particles_[0][i].weight     = 0.0;
         particles_[0][i].weight_sum = 0.0;
 
+        particles_[0][i].dm  = DynamicDistanceMapPtr(new DynamicDistanceMap(*particles_[0][0].dm));
+        particles_[0][i].occ = FrequencyOccupancyMapPtr(new FrequencyOccupancyMap(*particles_[0][0].occ));
         particles_[0][i].lm  = SimpleLandmark2DMapPtr( new SimpleLandmark2DMap(*(particles_[0][0].lm)) );
     }
 
@@ -232,98 +235,70 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
     Timer timer(true);
     Timer local_timer;
 
-    if (not has_first_scan_){
-        // The SLAM will only start once a first valid scan is received.
-        if (surface->points.size() < 50){
-            return false;
-        }
+    // TODO: minimum number of points as a parameter
+    bool invalid_surface   = surface->points.size() < 50;
+    bool invalid_landmarks = landmarks.empty();
 
-        timestamps_.push_back(timestamp);
-
-        // Lets update the maps of single particle and then
-        // replicate the result to the remaining particles.
-        // This is faster than applying the first scan to each
-        // individual particle.
-        current_surface_ = surface;
-        updateParticleMaps(&particles_[current_particle_set_][0]);
-
-        const uint32_t num_particles = particles_[current_particle_set_].size();
-        for (uint32_t i = 1; i < num_particles; ++i){
-            particles_[0][i].dm  = DynamicDistanceMapPtr(new DynamicDistanceMap(*particles_[current_particle_set_][0].dm));
-            particles_[0][i].occ = FrequencyOccupancyMapPtr(new FrequencyOccupancyMap(*particles_[current_particle_set_][0].occ));
-        }
-
-        if (summary){
-            auto elapsed = timer.elapsed();
-            probeStamp(timestamp);
-            probeTime(elapsed);
-            probeMTime(elapsed);
-            probeMem();
-        }
-
-        has_first_scan_ = true;
-        odom_ = odometry;
-        return true;
-    }
-
-    // 1. Predict from odometry
-    Pose2D odelta = odom_ - odometry;
-    odom_ = odometry;
-
-    uint32_t num_particles = particles_[current_particle_set_].size();
-    for (uint32_t i = 0; i < num_particles; ++i)
-        drawFromMotion(odelta, particles_[current_particle_set_][i].pose, particles_[current_particle_set_][i].pose);
-
-    // Do we have data??
-    bool is_valid = surface->points.size() >= 50;
-    if (!is_valid and landmarks.size() == 0){
-
-        valid_surface_ = false;
-
-        // Force a resample if the accumulated motion is too large.
-        // The objective is to increase the number of particles due to
-        // accumulated error by the motion (i.e. odometry).
-        if ((acc_trans_ > 1.0) || (acc_rot_ > M_PI * 0.5)){
-            normalize();
-            resample(false);
-
-            clusterStats();
-
-            // FORCE AN UPDATE
-            acc_trans_ = options_.trans_thresh;
-            acc_rot_   = options_.rot_thresh;
-
-            return true;
-        }
-
+    if (invalid_surface && invalid_landmarks){
+        // Nothing to do here
         return false;
     }
+
+    // Predict from odometry if data already arived.
+    Pose2D odelta;
+    if (has_first_scan_ || has_first_landmarks_){
+        odelta = odom_ - odometry;
+        uint32_t num_particles = particles_[current_particle_set_].size();
+        for (uint32_t i = 0; i < num_particles; ++i)
+            drawFromMotion(odelta, particles_[current_particle_set_][i].pose, particles_[current_particle_set_][i].pose);
+    }
+    odom_ = odometry;
+
+    // Bypass motion gathering check if set to false;
+    bool gather_motion = true;
+
+    // The first time a data source arrives it it needs to be handled differently.
+    if (!has_first_scan_ or !has_first_landmarks_){
+        bool is_first_data = handleFirstData(surface, landmarks);
+
+        // If this is the very first time that any data
+        // type arrives then there is nothing else to do.
+        if (is_first_data)
+            return true;
+
+        // force an update
+        gather_motion = false;
+    }// end if
 
     // Do global localization if triggered.
     if (do_global_localization_){
         globalLocalization(surface, landmarks);
         do_global_localization_ = false;
 
-        // FORCE AN UPDATE
-        acc_trans_ = options_.trans_thresh;
-        acc_rot_   = options_.rot_thresh;
+        // force an update
+        gather_motion = false;
     }
 
     // only continue if the necessary motion was gathered.
     acc_trans_ += odelta.xy().norm();
     acc_rot_   += std::fabs(odelta.rotation());
-    if (acc_trans_ <= options_.trans_thresh &&
-        acc_rot_ <= options_.rot_thresh){
+    if (gather_motion &&
+        acc_trans_ <= options_.trans_thresh &&
+        acc_rot_   <= options_.rot_thresh){
         return false;
     }
 
+    // reset motion gathering
     acc_trans_ = 0;
     acc_rot_   = 0;
 
-    // 2. Apply scan matching
     current_surface_ = surface;
     local_timer.reset();
 
+    // Apply scan matching and calculate landmarks likelihood.
+    // If mapping is enabled, the landmarks will be added to
+    // the map if they do not exist.
+    uint32_t num_particles = particles_[current_particle_set_].size();
     if (thread_pool_){
 
         for (uint32_t i = 0; i < num_particles; ++i)
@@ -351,11 +326,11 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
     if (summary)
         probeNTime(local_timer.elapsed());
 
-    // 4. resample if needed
+    // Resample if needed
     // Force a resample if we have an invalid surface followed by a valid surface.
     // The objective is to reduce the number of samples before the map update happens.
-    bool force_resample = is_valid && !valid_surface_;
-    valid_surface_ = is_valid;
+    bool force_resample = !invalid_surface && !valid_surface_;
+    valid_surface_ = !invalid_surface;
 
     if (force_resample || neff_ < (num_particles*0.5)){
         local_timer.reset();
@@ -680,6 +655,55 @@ double lama::HybridPFSlam2D::calculateLikelihood(const Particle& particle)
     } // end for
 
     return likelihood;
+}
+
+
+bool lama::HybridPFSlam2D::handleFirstData(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark>& landmarks)
+{
+    bool valid_surface   = surface->points.size() >= 50;
+    bool valid_landmarks = not landmarks.empty();
+
+    bool first_update = (!has_first_scan_) && (!has_first_landmarks_);
+
+    // Lets update the maps of a single particle and then replicate the result to the remaining particles.
+    // This is faster than applying the first data to each individual particle.
+    // This can only be done if it is the very first time data arrives, otherwise the particles poses no
+    // longer coincide and the particles map will be updated elsewhere.
+
+    // Laser update
+    if (valid_surface && !has_first_scan_){
+        if (first_update){
+            current_surface_ = surface;
+            updateParticleMaps(&particles_[current_particle_set_][0]);
+
+            const uint32_t num_particles = particles_[current_particle_set_].size();
+            for (uint32_t i = 1; i < num_particles; ++i){
+                int pset = current_particle_set_;
+                particles_[pset][i].dm  = DynamicDistanceMapPtr(new DynamicDistanceMap(*particles_[pset][0].dm));
+                particles_[pset][i].occ = FrequencyOccupancyMapPtr(new FrequencyOccupancyMap(*particles_[pset][0].occ));
+            }// end for
+        }// end if
+
+        has_first_scan_ = true;
+    }// end if
+
+    // Landmark update
+    if (valid_landmarks && !has_first_landmarks_){
+
+        if (first_update){
+            updateParticleLandmarks(&(particles_[current_particle_set_][0]), landmarks);
+
+            const uint32_t num_particles = particles_[current_particle_set_].size();
+            for (uint32_t i = 1; i < num_particles; ++i){
+                int pset = current_particle_set_;
+                particles_[pset][i].lm  = SimpleLandmark2DMapPtr( new SimpleLandmark2DMap(*(particles_[pset][0].lm)) );
+            }// end for
+        }// end if
+
+        has_first_landmarks_ = true;
+    }// end if
+
+    return first_update;
 }
 
 void lama::HybridPFSlam2D::scanMatch(Particle* particle)

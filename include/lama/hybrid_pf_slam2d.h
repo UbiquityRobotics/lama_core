@@ -308,6 +308,8 @@ private:
     double calculateLikelihood(const PointCloudXYZ::Ptr& surface, const Pose2D& pose);
     double calculateLikelihood(const Particle& particle);
 
+    bool handleFirstData(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark>& landmarks);
+
     void scanMatch(Particle* particle);
     void updateParticleMaps(Particle* particle);
 
@@ -348,7 +350,10 @@ private:
 
     double acc_trans_;
     double acc_rot_;
+
     bool has_first_scan_;
+    bool has_first_landmarks_;
+
     bool valid_surface_;
 
     // Controls the execution of the mapping process
