@@ -46,6 +46,8 @@
 
 #include "lama/kdtree.h"
 #include "lama/kld_sampling.h"
+
+#include "lama/gnss.h"
 #include "lama/simple_landmark2d_map.h"
 
 #include <Eigen/StdVector>
@@ -183,6 +185,13 @@ public:
         double meas_sigma = 0.05;
         /// Use this to smooth the measurements likelihood.
         double meas_sigma_gain = 3;
+        /// Minimum variance of the gps
+        double gnss_min_var = 0.025;
+        /// If set to true, the gnss "exact" position
+        /// will be injected in the particle set.
+        bool gnss_injection = false;
+        /// Probability of injecting the gnss "exact" positon.
+        double gnss_injection_prob = 0.01;
         /// The ammount of displacement that the system must
         /// gather before any update takes place.
         double trans_thresh = 0.5;
@@ -223,6 +232,8 @@ public:
         int32_t gloc_particles = 3000;
         /// Save data to create an execution summary.
         bool create_summary = false;
+        /// Keep particle pose history
+        bool keep_pose_history = false;
     };
 
     HybridPFSlam2D(const Options& options = Options());
@@ -237,7 +248,9 @@ public:
     uint64_t getMemoryUsage() const;
     uint64_t getMemoryUsage(uint64_t& occmem, uint64_t& dmmem) const;
 
-    bool update(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark>& landmarks, const Pose2D& odometry, double timestamp);
+    // Update the SLAM system.
+    bool update(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark>& landmarks,
+            const GNSS& gnss, const Pose2D& odometry, double timestamp);
 
     size_t getBestParticleIdx() const;
 
@@ -268,7 +281,7 @@ public:
 
     inline const SimpleLandmark2DMap* getLandmarkMap() const
     {
-        if (!has_first_scan_) return nullptr;
+        if (!has_first_landmarks_) return nullptr;
 
         size_t pidx = getBestParticleIdx();
         return particles_[current_particle_set_][pidx].lm.get();
@@ -308,12 +321,13 @@ private:
     double calculateLikelihood(const PointCloudXYZ::Ptr& surface, const Pose2D& pose);
     double calculateLikelihood(const Particle& particle);
 
-    bool handleFirstData(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark>& landmarks);
+    bool handleFirstData(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark>& landmarks, const GNSS& gnss);
 
     void scanMatch(Particle* particle);
     void updateParticleMaps(Particle* particle);
 
     void updateParticleLandmarks(Particle* particle, const DynamicArray<Landmark>& landmarks);
+    void updateParticleGNSS(Particle* particle, const Vector2d& prior, const Matrix2d& covar);
 
     void normalize();
     void resample(bool reset_weight = false);
@@ -348,11 +362,20 @@ private:
     Pose2D odom_;
     Pose2D pose_;
 
+    Pose2D gnss_ref_pose_;
+    Pose2D gnss_offset_;
+    Pose2D gnss_pose_;
+
+    Vector2f gnss_ref_;
+    std::string gnss_zone_;
+
     double acc_trans_;
     double acc_rot_;
 
-    bool has_first_scan_;
-    bool has_first_landmarks_;
+    bool has_first_scan_      = false;
+    bool has_first_landmarks_ = false;
+    bool has_first_gnss_      = false;
+    bool gnss_needs_heading_  = true;
 
     bool valid_surface_;
 

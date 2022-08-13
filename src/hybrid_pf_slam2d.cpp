@@ -46,6 +46,8 @@
 #include "lama/hybrid_pf_slam2d.h"
 #include "lama/match_surface_2d.h"
 
+#include "lama/gnss.h"
+
 #include "lama/sdm/export.h"
 
 std::string lama::HybridPFSlam2D::Summary::report() const
@@ -116,6 +118,7 @@ lama::HybridPFSlam2D::HybridPFSlam2D(const Options& options)
     neff_ = options.particles;
     has_first_scan_ = false;
     has_first_landmarks_ = false;
+    has_first_gnss_ = false;
     do_mapping_ = true;
     truncated_ray_ = options.truncated_ray;
     truncated_range_ = options.truncated_range;
@@ -141,7 +144,8 @@ lama::HybridPFSlam2D::HybridPFSlam2D(const Options& options)
     particles_[0].resize(num_particles);
     current_particle_set_ = 0;
 
-    particles_[0][0].poses.push_back(pose_);
+    if (options_.keep_pose_history)
+        particles_[0][0].poses.push_back(pose_);
     particles_[0][0].pose = pose_;
 
     particles_[0][0].weight     = 0.0;
@@ -155,7 +159,8 @@ lama::HybridPFSlam2D::HybridPFSlam2D(const Options& options)
     particles_[0][0].lm = SimpleLandmark2DMapPtr(new SimpleLandmark2DMap());
 
     for (uint32_t i = 1; i < num_particles; ++i){
-        particles_[0][i].poses.push_back(pose_);
+        if (options_.keep_pose_history)
+            particles_[0][i].poses.push_back(pose_);
         particles_[0][i].pose = pose_;
 
         particles_[0][i].weight     = 0.0;
@@ -184,7 +189,8 @@ lama::HybridPFSlam2D::~HybridPFSlam2D()
 
 void lama::HybridPFSlam2D::setPrior(const Pose2D& prior)
 {
-    pose_ = prior;
+    // pose_ = prior;
+    setPose(prior);
 }
 
 void lama::HybridPFSlam2D::setPose(const Pose2D& initialpose)
@@ -198,8 +204,12 @@ void lama::HybridPFSlam2D::setPose(const Pose2D& initialpose)
     Pose2D offset = pose - initialpose;
 
     // Apply the offset to all particles.
-    for (auto& particle : particles_[current_particle_set_])
+    for (auto& particle : particles_[current_particle_set_]){
         particle.pose += offset;
+
+        if (options_.keep_pose_history)
+            particle.poses.back() = particle.pose;
+    }
 }
 
 uint64_t lama::HybridPFSlam2D::getMemoryUsage() const
@@ -229,24 +239,15 @@ uint64_t lama::HybridPFSlam2D::getMemoryUsage(uint64_t& occmem, uint64_t& dmmem)
     return occmem + dmmem;
 }
 
-bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark>& landmarks,
+bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark>& landmarks, const GNSS& gnss,
                                   const Pose2D& odometry, double timestamp)
 {
     Timer timer(true);
     Timer local_timer;
 
-    // TODO: minimum number of points as a parameter
-    bool invalid_surface   = surface->points.size() < 50;
-    bool invalid_landmarks = landmarks.empty();
-
-    if (invalid_surface && invalid_landmarks){
-        // Nothing to do here
-        return false;
-    }
-
     // Predict from odometry if data already arived.
     Pose2D odelta;
-    if (has_first_scan_ || has_first_landmarks_){
+    if (has_first_scan_ || has_first_landmarks_ || has_first_gnss_){
         odelta = odom_ - odometry;
         uint32_t num_particles = particles_[current_particle_set_].size();
         for (uint32_t i = 0; i < num_particles; ++i)
@@ -254,20 +255,27 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
     }
     odom_ = odometry;
 
+    // TODO: minimum number of points as a parameter
+    bool invalid_surface   = surface->points.size() < 50;
+    bool invalid_landmarks = landmarks.empty();
+    bool invalid_gnss      = gnss.status == -1;
+
+    if (invalid_surface && invalid_landmarks && invalid_gnss){
+        // Nothing to do here
+        return false;
+    }
+
     // Bypass motion gathering check if set to false;
     bool gather_motion = true;
 
     // The first time a data source arrives it it needs to be handled differently.
-    if (!has_first_scan_ or !has_first_landmarks_){
-        bool is_first_data = handleFirstData(surface, landmarks);
+    if (!has_first_scan_ or !has_first_landmarks_ or !has_first_gnss_){
+        bool is_first_data = handleFirstData(surface, landmarks, gnss);
 
         // If this is the very first time that any data
         // type arrives then there is nothing else to do.
         if (is_first_data)
             return true;
-
-        // force an update
-        gather_motion = false;
     }// end if
 
     // Do global localization if triggered.
@@ -295,6 +303,52 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
     current_surface_ = surface;
     local_timer.reset();
 
+    // GNSS stuff
+    Pose2D   gnss_prior;
+    Matrix2d gnss_covar;
+    if (!invalid_gnss){
+
+        double gx, gy; // global x and y
+        std::string zone;
+        gnss.toUTM(gx, gy, zone);
+
+        // gnss_pose keesp the previous gnss pose
+        auto dx = gx - gnss_pose_.x();
+        auto dy = gy - gnss_pose_.y();
+        auto dxy_norm = hypot(dx, dy);
+
+        double heading;
+
+        if (dxy_norm < 0.05){
+            // there may be some inplace rotation..
+            // use the previous orientation and add a prediction from the odometry
+            heading = (SO2d(gnss_pose_.state.so2()) * odelta.state.so2()).log();
+
+            if (gnss_needs_heading_)
+                // invalidate our current estimate because it is not enough
+                invalid_gnss = true;
+        } else {
+            // get its absolute heading (assume differencial drive)
+            heading = atan2(dy, dx);
+            if (odelta.x() < 0.0){
+                SO2d so2(heading + M_PI); // use so2 to normalize the angle
+                heading = so2.log();
+            }
+
+            if (gnss_needs_heading_){
+                gnss_ref_pose_.state.so2() = SO2d(heading);
+                gnss_needs_heading_ = false;
+            }// end if
+        }// end if
+
+        gnss_pose_ = Pose2D(gx, gy, heading);
+        gnss_prior = gnss_offset_ + (gnss_ref_pose_ -  gnss_pose_);
+
+        gnss_covar = gnss.covar;
+        gnss_covar(0,0) += options_.gnss_min_var;
+        gnss_covar(1,1) += options_.gnss_min_var;
+    }
+
     // Apply scan matching and calculate landmarks likelihood.
     // If mapping is enabled, the landmarks will be added to
     // the map if they do not exist.
@@ -302,16 +356,28 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
     if (thread_pool_){
 
         for (uint32_t i = 0; i < num_particles; ++i)
-            thread_pool_->enqueue([this, i, &landmarks](){
-                scanMatch(&(particles_[current_particle_set_][i]));
-                updateParticleLandmarks(&(particles_[current_particle_set_][i]), landmarks);
+            thread_pool_->enqueue([this, i, &landmarks, &gnss, &gnss_prior, &invalid_surface, &invalid_landmarks, &invalid_gnss](){
+                Particle* p = &particles_[current_particle_set_][i];
+
+                if (!invalid_surface)   scanMatch(p);
+                if (!invalid_landmarks) updateParticleLandmarks(p, landmarks);
+                if (!invalid_gnss)      updateParticleGNSS(p, gnss_prior.xy(), gnss.covar);
+
+                if (this->options_.keep_pose_history)
+                    p->poses.push_back(p->pose);
             });
 
         thread_pool_->wait();
     } else {
         for (uint32_t i = 0; i < num_particles; ++i){
-            scanMatch(&particles_[current_particle_set_][i]);
-            updateParticleLandmarks(&(particles_[current_particle_set_][i]), landmarks);
+            Particle* p = &particles_[current_particle_set_][i];
+
+            if (!invalid_surface)   scanMatch(p);
+            if (!invalid_landmarks) updateParticleLandmarks(p, landmarks);
+            if (!invalid_gnss)      updateParticleGNSS(p, gnss_prior.xy(), gnss.covar);
+
+            if (options_.keep_pose_history)
+                p->poses.push_back(p->pose);
         } // end for
     } // end if
 
@@ -374,6 +440,17 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
         probeStamp(timestamp);
         probeMem();
     }
+
+    if (options_.gnss_injection && !invalid_gnss){
+        // With a 1% chance, inject a "exact" gps coordinate into the particle set
+        auto r = random::uniform();
+        if (neff_ < 2 or r < options_.gnss_injection_prob){
+            auto idx    = getBestParticleIdx();
+            Particle* p = &particles_[current_particle_set_][idx];
+            p->pose = gnss_prior;
+            p->poses.back() = gnss_prior;
+        }// end if
+    }// end if !invalid_gnss
 
     return true;
 }
@@ -446,7 +523,8 @@ bool lama::HybridPFSlam2D::setMaps(FrequencyOccupancyMap* map, SimpleLandmark2DM
     particles_[ps].resize(num_particles);
 
     // Make all particle have the same map
-    particles_[ps][0].poses.push_back(pose_);
+    if (options_.keep_pose_history)
+        particles_[ps][0].poses.push_back(pose_);
     particles_[ps][0].pose = pose_;
 
     particles_[ps][0].weight     = 0.0;
@@ -466,7 +544,8 @@ bool lama::HybridPFSlam2D::setMaps(FrequencyOccupancyMap* map, SimpleLandmark2DM
     particles_[ps][0].lm = SimpleLandmark2DMapPtr(lm_map);
 
     for (uint32_t i = 1; i < num_particles; ++i){
-        particles_[ps][i].poses.push_back(pose_);
+        if (options_.keep_pose_history)
+            particles_[ps][i].poses.push_back(pose_);
         particles_[ps][i].pose = pose_;
 
         particles_[ps][i].weight     = 0.0;
@@ -658,12 +737,15 @@ double lama::HybridPFSlam2D::calculateLikelihood(const Particle& particle)
 }
 
 
-bool lama::HybridPFSlam2D::handleFirstData(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark>& landmarks)
+bool lama::HybridPFSlam2D::handleFirstData(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark>& landmarks, const GNSS& gnss)
 {
     bool valid_surface   = surface->points.size() >= 50;
     bool valid_landmarks = not landmarks.empty();
+    bool valid_gnss      = gnss.status != -1;
 
-    bool first_update = (!has_first_scan_) && (!has_first_landmarks_);
+    static bool _first_update = true;
+    bool first_update = _first_update;
+    _first_update = false;
 
     // Lets update the maps of a single particle and then replicate the result to the remaining particles.
     // This is faster than applying the first data to each individual particle.
@@ -703,6 +785,19 @@ bool lama::HybridPFSlam2D::handleFirstData(const PointCloudXYZ::Ptr& surface, co
         has_first_landmarks_ = true;
     }// end if
 
+    if (valid_gnss && !has_first_gnss_){
+
+        // generate a reference
+        double refx, refy;
+        gnss.toUTM(refx, refy, gnss_zone_);
+
+        gnss_offset_ = getPose();
+        gnss_ref_pose_ = Pose2D(refx, refy , 0.0);
+        gnss_pose_     = gnss_ref_pose_;
+
+        has_first_gnss_ = true;
+    }
+
     return first_update;
 }
 
@@ -722,8 +817,6 @@ void lama::HybridPFSlam2D::scanMatch(Particle* particle)
 
     Solve(so, match_surface, 0);
     particle->pose.state = match_surface.getState();
-
-    particle->poses.push_back(particle->pose);
 
     double l = calculateLikelihood(*particle);
     particle->weight_sum += l;
@@ -883,7 +976,18 @@ void lama::HybridPFSlam2D::updateParticleLandmarks(Particle* particle, const Dyn
         }
 
     }// end for
+}
 
+void lama::HybridPFSlam2D::updateParticleGNSS(Particle* particle, const Vector2d& prior, const Matrix2d& covar)
+{
+    Vector2d diff = particle->pose.xy() - prior;
+    double w = -0.5 * (diff.transpose() * covar.inverse() * diff)(0);
+
+    if ( std::isnan(w) )
+        return;
+
+    particle->lm_weight += w;
+    particle->weight_sum += w;
 }
 
 void lama::HybridPFSlam2D::normalize()
@@ -891,7 +995,7 @@ void lama::HybridPFSlam2D::normalize()
     const uint32_t num_particles = particles_[current_particle_set_].size();
 
     double gain   = 1.0 / (options_.meas_sigma_gain * num_particles);
-    double lmgain = 1.0 / (0.1 * num_particles);
+    double lmgain = 1.0; // (0.01 * num_particles);
 
     double max_l   = particles_[current_particle_set_][0].weight;
     double max_llm = particles_[current_particle_set_][0].lm_weight;
