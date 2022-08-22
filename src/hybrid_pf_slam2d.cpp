@@ -265,7 +265,25 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
     bool invalid_gnss      = gnss.status == -1;
 
     if (invalid_surface && invalid_landmarks && invalid_gnss){
-        // Nothing to do here
+
+        // Force a resample if the accumulated motion is too large.
+        // The objective is to increase the number of particles due to
+        // accumulated error by the motion (i.e. odometry).
+        if ((acc_trans_ > 1.0) || (acc_rot_ > M_PI * 0.5)){
+
+            normalize();
+            resample(false);
+
+            clusterStats();
+
+            // FORCE AN UPDATE
+            acc_trans_ = options_.trans_thresh;
+            acc_rot_   = options_.rot_thresh;
+
+            return true;
+        }
+
+        // else, nothing to do here
         return false;
     }
 
