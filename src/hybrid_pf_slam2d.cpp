@@ -248,7 +248,11 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
     // Predict from odometry if data already arived.
     Pose2D odelta;
     if (has_first_scan_ || has_first_landmarks_ || has_first_gnss_){
+
         odelta = odom_ - odometry;
+        acc_trans_ += odelta.xy().norm();
+        acc_rot_   += std::fabs(odelta.rotation());
+
         uint32_t num_particles = particles_[current_particle_set_].size();
         for (uint32_t i = 0; i < num_particles; ++i)
             drawFromMotion(odelta, particles_[current_particle_set_][i].pose, particles_[current_particle_set_][i].pose);
@@ -288,8 +292,6 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
     }
 
     // only continue if the necessary motion was gathered.
-    acc_trans_ += odelta.xy().norm();
-    acc_rot_   += std::fabs(odelta.rotation());
     if (gather_motion &&
         acc_trans_ <= options_.trans_thresh &&
         acc_rot_   <= options_.rot_thresh){
