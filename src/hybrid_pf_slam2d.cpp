@@ -334,7 +334,11 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
             heading = atan2(dy, dx);
             if (odelta.x() < 0.0){
                 SO2d so2(heading + M_PI); // use so2 to normalize the angle
-                heading = so2.log();
+
+                // make sure the difference is not too big,
+                auto diff = (gnss_pose_.state.so2().inverse() * so2).log();
+                if (std::fabs(diff) < M_PI*0.5)
+                    heading = so2.log();
             }
 
             if (gnss_needs_heading_){
