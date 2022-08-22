@@ -450,7 +450,8 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
             auto idx    = getBestParticleIdx();
             Particle* p = &particles_[current_particle_set_][idx];
             p->pose = gnss_prior;
-            p->poses.back() = gnss_prior;
+            if (options_.keep_pose_history)
+                p->poses.back() = gnss_prior;
         }// end if
     }// end if !invalid_gnss
 
