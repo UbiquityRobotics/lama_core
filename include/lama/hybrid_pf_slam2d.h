@@ -183,8 +183,10 @@ public:
         double srt = 0.2;
         /// Measurement confidence.
         double meas_sigma = 0.05;
-        /// Use this to smooth the measurements likelihood.
+        /// Use this to smooth the measurements likelihood of the laser.
         double meas_sigma_gain = 3;
+        /// Use this to smooth the measurements likelihood of the landmarks and GNSS
+        double landmark_gain = 0.05;
         /// Minimum variance of the gps
         double gnss_min_var = 0.025;
         /// If set to true, the gnss "exact" position

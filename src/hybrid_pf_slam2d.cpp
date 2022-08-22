@@ -995,7 +995,7 @@ void lama::HybridPFSlam2D::normalize()
     const uint32_t num_particles = particles_[current_particle_set_].size();
 
     double gain   = 1.0 / (options_.meas_sigma_gain * num_particles);
-    double lmgain = 1.0; // (0.01 * num_particles);
+    double lmgain = 1.0 / (options_.landmark_gain * num_particles);
 
     double max_l   = particles_[current_particle_set_][0].weight;
     double max_llm = particles_[current_particle_set_][0].lm_weight;
