@@ -312,7 +312,8 @@ public:
     { do_global_localization_ = true; }
 
     // Convert local map coordinates to global latitude/longitude coordinates.
-    void UTMtoLL(double x, double y, double& latitude, double& longitude);
+    // Returns false if the navsat reference position hasn't been determined yet.
+    bool UTMtoLL(double x, double y, double& latitude, double& longitude);
 
 private:
 

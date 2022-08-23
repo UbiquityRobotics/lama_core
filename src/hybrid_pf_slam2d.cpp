@@ -586,8 +586,11 @@ bool lama::HybridPFSlam2D::setMaps(FrequencyOccupancyMap* map, SimpleLandmark2DM
     return true;
 }
 
-void lama::HybridPFSlam2D::UTMtoLL(double x, double y, double& latitude, double& longitude)
+bool lama::HybridPFSlam2D::UTMtoLL(double x, double y, double& latitude, double& longitude)
 {
+    if (not has_first_gnss_)
+        return false;
+
     Pose2D global = gnss_ref_pose_ + (gnss_offset_ - Pose2D(x,y,0));
 
     GNSS gnss;
@@ -595,6 +598,8 @@ void lama::HybridPFSlam2D::UTMtoLL(double x, double y, double& latitude, double&
 
     latitude = gnss.latitude;
     longitude = gnss.longitude;
+
+    return true;
 }
 
 bool lama::HybridPFSlam2D::globalLocalization(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark>& landmarks)
