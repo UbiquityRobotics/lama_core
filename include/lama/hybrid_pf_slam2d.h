@@ -315,6 +315,24 @@ public:
     // Returns false if the navsat reference position hasn't been determined yet.
     bool UTMtoLL(double x, double y, double& latitude, double& longitude);
 
+    inline const Pose2D& getGNSSRef() const
+    { return gnss_ref_pose_; }
+
+    inline const Pose2D& getGNSSOffset() const
+    { return gnss_offset_; }
+
+    inline const std::string& getGNSSZone() const
+    { return gnss_zone_; }
+
+    inline void setGNSSInfo(const Pose2D& ref, const Pose2D& offset, const std::string& zone)
+    {
+        gnss_ref_pose_ = ref;
+        gnss_offset_   = offset;
+        gnss_zone_     = zone;
+        has_first_gnss_     = true;
+        gnss_needs_heading_ = false;
+    }
+
 private:
 
     StrategyPtr makeStrategy(const std::string& name, const VectorXd& parameters);
