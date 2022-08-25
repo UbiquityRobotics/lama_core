@@ -287,9 +287,6 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
         return false;
     }
 
-    // Bypass motion gathering check if set to false;
-    bool gather_motion = true;
-
     // The first time a data source arrives it it needs to be handled differently.
     if (!has_first_scan_ or !has_first_landmarks_ or !has_first_gnss_){
         bool is_first_data = handleFirstData(surface, landmarks, gnss);
@@ -300,17 +297,8 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
             return true;
     }// end if
 
-    // Do global localization if triggered.
-    if (do_global_localization_){
-        globalLocalization(surface, landmarks);
-        do_global_localization_ = false;
-
-        // force an update
-        gather_motion = false;
-    }
-
     // only continue if the necessary motion was gathered.
-    if (gather_motion &&
+    if (!do_global_localization_ &&
         acc_trans_ <= options_.trans_thresh &&
         acc_rot_   <= options_.rot_thresh){
         return false;
@@ -371,6 +359,18 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
         gnss_covar = gnss.covar;
         gnss_covar(0,0) += options_.gnss_min_var;
         gnss_covar(1,1) += options_.gnss_min_var;
+
+        // GNSS is a global position, we can use it directly to set
+        // our localization when global localization is triggered.
+        if (do_global_localization_ && !gnss_needs_heading_){
+            setPose(gnss_prior);
+            do_global_localization_ = false;
+        }
+    }
+
+    // Handle global localization with lidar and landmarks before updating
+    if (do_global_localization_){
+        do_global_localization_ = ! globalLocalization(surface, landmarks);
     }
 
     // Apply scan matching and calculate landmarks likelihood.
