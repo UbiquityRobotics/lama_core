@@ -210,6 +210,11 @@ void lama::HybridPFSlam2D::setPose(const Pose2D& initialpose)
         if (options_.keep_pose_history)
             particle.poses.back() = particle.pose;
     }
+
+    // disable any ongoing global localization
+    do_global_localization_ = false;
+}
+
 }
 
 uint64_t lama::HybridPFSlam2D::getMemoryUsage() const
