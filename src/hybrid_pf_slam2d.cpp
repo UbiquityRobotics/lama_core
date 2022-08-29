@@ -604,7 +604,65 @@ bool lama::HybridPFSlam2D::UTMtoLL(double x, double y, double& latitude, double&
 
 bool lama::HybridPFSlam2D::globalLocalization(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark>& landmarks)
 {
-    if (not has_first_scan_)
+    // TODO: minimum number of points as a parameter
+    bool invalid_surface   = surface->points.size() < 50;
+    bool invalid_landmarks = landmarks.empty();
+
+    if (invalid_surface && invalid_landmarks)
+        return false; // global localization not done
+
+    // First, try with the landmarks
+    if (!invalid_landmarks){
+        auto landmark_map  = getLandmarkMap();
+
+        for (auto& landmark : landmarks){
+
+            uint32_t id = landmark.id;
+            auto lm = landmark_map->get(id);
+            if ( lm == nullptr ) continue;
+
+            // We use the first available landmark to estimate the correct pose of the robot.
+            // But the landmark should be reasonably close
+            Pose3D measurement(landmark.measurement);
+            if (measurement.xyz().head<2>().norm() > 3)
+                continue;
+
+            Pose3D loc3d( lm->state.state * measurement.state.inverse() );
+
+            // NOTE: The yaw + roll is a hack to solve the ambiguity of the euler angles.
+            Pose2D newloc(loc3d.x(), loc3d.y(), loc3d.yaw() + std::fabs(loc3d.roll()) );
+
+            // RMSE validation if a surface is available
+            if (!invalid_surface){
+                auto distance_map  = getDistanceMap();
+
+                Affine3d moving_tf = Translation3d(surface->sensor_origin_) * surface->sensor_orientation_;
+                Affine3d fixed_tf = Translation3d(Vector3d(newloc.x(),newloc.y(),0.0)) * AngleAxisd(newloc.rotation(), Vector3d::UnitZ());
+
+                Affine3d tf = fixed_tf * moving_tf;
+
+                const size_t num_points = surface->points.size();
+                double rmse = 0.0;
+                for (size_t i = 0; i < num_points; ++i){
+                    Vector3d hit = tf * surface->points[i];
+                    double dist = distance_map->distance(distance_map->w2m(hit));
+                    rmse += dist*dist;
+                } // end for
+                rmse = std::sqrt( rmse / num_points);
+
+                if (rmse > 0.1) continue;
+            }
+
+            setPose(newloc);
+            return true;
+
+        }// end for
+
+    }// end if
+
+
+    // Second, try with the laser
+    if (invalid_surface)
         return false;
 
     const size_t num_points = surface->points.size();
@@ -612,7 +670,6 @@ bool lama::HybridPFSlam2D::globalLocalization(const PointCloudXYZ::Ptr& surface,
     // Use the best occupancy map
     auto occupancy_map = getOccupancyMap();
     auto distance_map  = getDistanceMap();
-    auto landmark_map  = getLandmarkMap();
 
     Vector3d min, max;
     occupancy_map->bounds(min, max);
@@ -621,6 +678,7 @@ bool lama::HybridPFSlam2D::globalLocalization(const PointCloudXYZ::Ptr& surface,
 
     Pose2D best_pose = getPose();
     double best_likelihood = -std::numeric_limits<double>::max();
+    double best_rmse = 0;
 
     for (uint32_t i = 0; i < gloc_particles_; ++i){
 
@@ -640,6 +698,7 @@ bool lama::HybridPFSlam2D::globalLocalization(const PointCloudXYZ::Ptr& surface,
         if (j == 1000){
             // We were unable to find free space.
             // This prevents a infinite loop.
+            print("UNABLE TO FIND FREE SPACE\n");
             return false;
         }
 
@@ -653,45 +712,25 @@ bool lama::HybridPFSlam2D::globalLocalization(const PointCloudXYZ::Ptr& surface,
         Affine3d tf = fixed_tf * moving_tf;
 
         double likelihood = 0;
+        double rmse = 0.0;
         for (size_t i = 0; i < num_points; ++i){
             Vector3d hit = tf * surface->points[i];
-            double dist = distance_map->distance(hit, 0);
+            double dist = distance_map->distance(distance_map->w2m(hit));
             likelihood += - (dist*dist) / options_.meas_sigma;
+            rmse += dist*dist;
         } // end for
 
-        // calculate landmark likelihood
-        for (const auto& landmark : landmarks){
-
-            uint32_t id = landmark.id;
-            auto lm = landmark_map->get(id);
-            if ( lm == nullptr ) continue;
-
-            // abbreviation
-            const Matrix6d& sig = lm->covar;
-
-            // Predicted landmark
-            auto h = p3 - lm->state;
-
-            Matrix6d H; H.setIdentity();
-            H.topLeftCorner<3,3>() = p3.state.rotationMatrix().transpose();
-
-            // Update landmark covariance
-            Matrix6d Q = H * sig * H.transpose() + landmark.covar;
-
-            // innovation
-            auto inov = h - landmark.measurement;
-            Vector6d diff;
-            diff << landmark.measurement.head<3>() - h.xyz(),
-                    inov.state.so3().log();
-
-            likelihood += -0.5 * diff.transpose() * Q.inverse() * diff;
-        }
+        rmse = std::sqrt( rmse / num_points);
 
         if (likelihood > best_likelihood){
             best_likelihood = likelihood;
             best_pose = p;
+            best_rmse = rmse;
         }
     } // end for
+
+    if (best_rmse > 0.1)
+        return false;
 
     setPose(best_pose);
     return true;
