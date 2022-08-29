@@ -215,8 +215,6 @@ void lama::HybridPFSlam2D::setPose(const Pose2D& initialpose)
     do_global_localization_ = false;
 }
 
-}
-
 uint64_t lama::HybridPFSlam2D::getMemoryUsage() const
 {
     uint64_t total = 0;
