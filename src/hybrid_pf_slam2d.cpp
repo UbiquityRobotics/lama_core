@@ -629,7 +629,7 @@ bool lama::HybridPFSlam2D::globalLocalization(const PointCloudXYZ::Ptr& surface,
             // We use the first available landmark to estimate the correct pose of the robot.
             // But the landmark should be reasonably close
             Pose3D measurement(landmark.measurement);
-            if (measurement.xyz().head<2>().norm() > 3)
+            if (measurement.xyz().head<2>().norm() > 5)
                 continue;
 
             Pose3D loc3d( lm->state.state * measurement.state.inverse() );
@@ -658,7 +658,6 @@ bool lama::HybridPFSlam2D::globalLocalization(const PointCloudXYZ::Ptr& surface,
 
                 if (rmse > 0.1) continue;
             }
-#endif
 
             // Set the best particle to the new pose
             auto idx = getBestParticleIdx();
@@ -679,7 +678,9 @@ bool lama::HybridPFSlam2D::globalLocalization(const PointCloudXYZ::Ptr& surface,
 
                 angle += angle_step;
             }
+#endif
 
+            setPose(newloc);
             return true;
 
         }// end for
@@ -817,7 +818,7 @@ void lama::HybridPFSlam2D::checkForPossibleGlobalLocalizationTrigger(const Dynam
         odds = std::max(logodds(0.1), std::min(logodds(0.97), odds));
     }// end for
 
-    if (prob(odds) > 0.75){
+    if (prob(odds) > 0.5){
         odds = logodds(0.1);
         do_global_localization_ = true;
     }
