@@ -658,7 +658,6 @@ bool lama::HybridPFSlam2D::globalLocalization(const PointCloudXYZ::Ptr& surface,
 
                 if (rmse > 0.1) continue;
             }
-#endif
 
             // Set the best particle to the new pose
             auto idx = getBestParticleIdx();
@@ -679,8 +678,9 @@ bool lama::HybridPFSlam2D::globalLocalization(const PointCloudXYZ::Ptr& surface,
 
                 angle += angle_step;
             }
+#endif
 
-            /* setPose(newloc); */
+            setPose(newloc);
             return true;
 
         }// end for
@@ -810,7 +810,7 @@ void lama::HybridPFSlam2D::checkForPossibleGlobalLocalizationTrigger(const Dynam
         double d2 = diff.transpose() * Qi * diff; // squared Mahalanobis distance
         constexpr double nsigma  = 22.46 * 22.46; // 6 dof 99% sigma
         if ( d2 > nsigma )
-            odds += logodds(0.7); // hit
+            odds += logodds(0.75); // hit
         else
             odds += logodds(0.4); // miss (NOTE: logodds(0.4) is a negative number)
 
@@ -818,9 +818,18 @@ void lama::HybridPFSlam2D::checkForPossibleGlobalLocalizationTrigger(const Dynam
         odds = std::max(logodds(0.1), std::min(logodds(0.97), odds));
     }// end for
 
+    print("AUTO-GLOC :: probability of being lost %f\n", prob(odds));
+
     if (prob(odds) > 0.5){
+        print("AUTO-GLOC :: Global Localization triggered\n");
         odds = logodds(0.1);
         do_global_localization_ = ! globalLocalization(PointCloudXYZ::Ptr(), landmarks);
+
+        if (do_global_localization_ == true)
+            print("AUTO-GLOC :: Global Localization FAIL\n");
+        else
+            print("AUTO-GLOC :: Global Localization SUCCESS\n");
+
     }
 }
 
