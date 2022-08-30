@@ -610,7 +610,7 @@ bool lama::HybridPFSlam2D::UTMtoLL(double x, double y, double& latitude, double&
 bool lama::HybridPFSlam2D::globalLocalization(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark>& landmarks)
 {
     // TODO: minimum number of points as a parameter
-    bool invalid_surface   = surface->points.size() < 50;
+    bool invalid_surface   = surface && (surface->points.size() < 50);
     bool invalid_landmarks = landmarks.empty();
 
     if (invalid_surface && invalid_landmarks)
@@ -658,6 +658,7 @@ bool lama::HybridPFSlam2D::globalLocalization(const PointCloudXYZ::Ptr& surface,
 
                 if (rmse > 0.1) continue;
             }
+#endif
 
             // Set the best particle to the new pose
             auto idx = getBestParticleIdx();
@@ -678,9 +679,8 @@ bool lama::HybridPFSlam2D::globalLocalization(const PointCloudXYZ::Ptr& surface,
 
                 angle += angle_step;
             }
-#endif
 
-            setPose(newloc);
+            /* setPose(newloc); */
             return true;
 
         }// end for
@@ -820,7 +820,7 @@ void lama::HybridPFSlam2D::checkForPossibleGlobalLocalizationTrigger(const Dynam
 
     if (prob(odds) > 0.5){
         odds = logodds(0.1);
-        do_global_localization_ = true;
+        do_global_localization_ = ! globalLocalization(PointCloudXYZ::Ptr(), landmarks);
     }
 }
 
