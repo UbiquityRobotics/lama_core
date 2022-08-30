@@ -480,6 +480,8 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
         }// end if
     }// end if !invalid_gnss
 
+    checkForPossibleGlobalLocalizationTrigger(landmarks);
+
     return true;
 }
 
@@ -739,6 +741,67 @@ bool lama::HybridPFSlam2D::globalLocalization(const PointCloudXYZ::Ptr& surface,
 
     setPose(best_pose);
     return true;
+}
+
+void lama::HybridPFSlam2D::checkForPossibleGlobalLocalizationTrigger(const DynamicArray<Landmark>& landmarks)
+{
+    // only when mapping is disabled and not already doing global localization.
+    if (do_mapping_ || do_global_localization_) return;
+
+    // early quit if not landmark is available
+    if (landmarks.size() == 0) return;
+
+    //helpers
+    auto prob    = [](double logodds){ return 1.0 - 1.0 / (1.0 + std::exp(logodds)); };
+    auto logodds = [](double prob){ return std::log(prob / (1.0 - prob)); };
+
+    // log odds probability
+    static double odds = logodds(0.1);
+
+    // use the landmark map and pose from the best particle
+    auto idx = getBestParticleIdx();
+    auto landmark_map  = particles_[current_particle_set_][idx].lm.get();
+    auto p2d = particles_[current_particle_set_][idx].pose;
+
+    Pose3D pose(Vector3d(p2d.x(), p2d.y(), 0.0), p2d.rotation());
+
+    for (auto& landmark : landmarks){
+
+        uint32_t id = landmark.id;
+        auto lm = landmark_map->get(id);
+        if ( lm == nullptr ) continue; // not in the map
+
+        Matrix6d& sig = lm->covar;
+        auto h = pose - lm->state;
+
+        Matrix6d H; H.setIdentity();
+        H.topLeftCorner<3,3>() = pose.state.rotationMatrix().transpose();
+
+        Matrix6d Q = H * sig * H.transpose() + landmark.covar;
+        Matrix6d Qi = Q.inverse();
+
+        // inovation
+        auto inov = h - landmark.measurement;
+        Vector6d diff;
+        diff << landmark.measurement.head<3>() - h.xyz(),
+             inov.state.so3().log();
+
+        // Compatibility test with the Mahalanobis distance.
+        double d2 = diff.transpose() * Qi * diff; // squared Mahalanobis distance
+        constexpr double nsigma  = 22.46 * 22.46; // 6 dof 99% sigma
+        if ( d2 > nsigma )
+            odds += logodds(0.7); // hit
+        else
+            odds += logodds(0.4); // miss (NOTE: logodds(0.4) is a negative number)
+
+        // clamp the odds
+        odds = std::max(logodds(0.1), std::min(logodds(0.97), odds));
+    }// end for
+
+    if (prob(odds) > 0.75){
+        odds = logodds(0.1);
+        do_global_localization_ = true;
+    }
 }
 
 

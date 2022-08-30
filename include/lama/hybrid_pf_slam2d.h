@@ -353,6 +353,8 @@ private:
     // global pose is correct or not.
     bool globalLocalization(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark>& landmarks);
 
+    void checkForPossibleGlobalLocalizationTrigger(const DynamicArray<Landmark>& landmarks);
+
 private:
     Options options_;
     SolverOptions solver_options_;
