@@ -660,7 +660,26 @@ bool lama::HybridPFSlam2D::globalLocalization(const PointCloudXYZ::Ptr& surface,
             }
 #endif
 
-            setPose(newloc);
+            // Set the best particle to the new pose
+            auto idx = getBestParticleIdx();
+            particles_[current_particle_set_][idx].pose = newloc;
+
+            // Draw a half circle around the landmark with the remaining particles.
+            const size_t num_particles = particles_[current_particle_set_].size();
+            double angle_step = M_PI / num_particles;
+            double angle = -M_PI*0.5;
+
+            for (size_t i = 1; i < num_particles; ++i){
+
+                Pose3D base(Vector3d(0,0,0), angle = i * angle_step);
+                Pose3D l3d( lm->state.state * (base + measurement).state.inverse() );
+                Pose2D l2d(loc3d.x(), loc3d.y(), loc3d.yaw() + std::fabs(loc3d.roll()) );
+
+                particles_[current_particle_set_][(idx + i) % num_particles].pose = l2d;
+
+                angle += angle_step;
+            }
+
             return true;
 
         }// end for
