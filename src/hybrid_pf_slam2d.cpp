@@ -636,6 +636,7 @@ bool lama::HybridPFSlam2D::globalLocalization(const PointCloudXYZ::Ptr& surface,
             Pose2D newloc(loc3d.x(), loc3d.y(), loc3d.yaw() + std::fabs(loc3d.roll()) );
 
             // RMSE validation if a surface is available
+#if 0       // Currently disabled....
             if (!invalid_surface){
                 auto distance_map  = getDistanceMap();
 
@@ -655,6 +656,7 @@ bool lama::HybridPFSlam2D::globalLocalization(const PointCloudXYZ::Ptr& surface,
 
                 if (rmse > 0.1) continue;
             }
+#endif
 
             setPose(newloc);
             return true;
