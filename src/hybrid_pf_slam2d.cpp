@@ -610,7 +610,7 @@ bool lama::HybridPFSlam2D::UTMtoLL(double x, double y, double& latitude, double&
 bool lama::HybridPFSlam2D::globalLocalization(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark>& landmarks)
 {
     // TODO: minimum number of points as a parameter
-    bool invalid_surface   = surface && (surface->points.size() < 50);
+    bool invalid_surface   = surface ? (surface->points.size() < 50) : true;
     bool invalid_landmarks = landmarks.empty();
 
     if (invalid_surface && invalid_landmarks)
