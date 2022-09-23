@@ -179,6 +179,9 @@ lama::HybridPFSlam2D::HybridPFSlam2D(const Options& options)
     // Global localization stuff
     do_global_localization_ = false;
     gloc_particles_ = options.gloc_particles;
+
+    // Set to true when the state of the filter is changed by "external forces"
+    forced_update_ = false;
 }
 
 lama::HybridPFSlam2D::~HybridPFSlam2D()
@@ -213,6 +216,40 @@ void lama::HybridPFSlam2D::setPose(const Pose2D& initialpose)
 
     // disable any ongoing global localization
     do_global_localization_ = false;
+    forced_update_ = true;
+}
+
+void lama::HybridPFSlam2D::pauseMapping()
+{
+    do_mapping_ = false;
+
+    mapping_particle_set_ = current_particle_set_;
+
+    // just to make sure
+    particles_[2].clear();
+    particles_[3].clear();
+
+    const uint32_t num_particles = particles_[current_particle_set_].size();
+
+    auto idx = getBestParticleIdx();
+    for (uint32_t i = 0; i < num_particles; ++i){
+        particles_[2].push_back( particles_[current_particle_set_][i] );
+
+        particles_[2][i].dm  = particles_[current_particle_set_][idx].dm;
+        particles_[2][i].occ = particles_[current_particle_set_][idx].occ;
+        particles_[2][i].lm  = particles_[current_particle_set_][idx].lm;
+    }
+
+    current_particle_set_ = 2;
+}
+
+void lama::HybridPFSlam2D::resumeMapping()
+{
+    do_mapping_ = true;
+    auto pose   = getPose();
+
+    current_particle_set_ = mapping_particle_set_;
+    setPose(pose);
 }
 
 uint64_t lama::HybridPFSlam2D::getMemoryUsage() const
@@ -247,6 +284,9 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
 {
     Timer timer(true);
     Timer local_timer;
+
+    bool external_change = forced_update_;
+    forced_update_ = false;
 
     // Predict from odometry if data already arived.
     Pose2D odelta;
@@ -287,7 +327,7 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
         }
 
         // else, nothing to do here
-        return false;
+        return external_change;
     }
 
     // The first time a data source arrives it it needs to be handled differently.
@@ -304,7 +344,7 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
     if (!do_global_localization_ &&
         acc_trans_ <= options_.trans_thresh &&
         acc_rot_   <= options_.rot_thresh){
-        return false;
+        return external_change;
     }
 
     // reset motion gathering
@@ -425,7 +465,10 @@ bool lama::HybridPFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Dynam
     bool force_resample = !invalid_surface && !valid_surface_;
     valid_surface_ = !invalid_surface;
 
-    if (force_resample || neff_ < (num_particles*0.5)){
+    // on localization only, resampling should be more often
+    double neff_factor = do_mapping_ ? 0.5 : 0.95;
+
+    if (force_resample || neff_ < (num_particles*neff_factor)){
         local_timer.reset();
 
         resample();
@@ -549,7 +592,11 @@ bool lama::HybridPFSlam2D::setMaps(FrequencyOccupancyMap* map, SimpleLandmark2DM
         return false;
 
     const uint32_t num_particles = particles_[current_particle_set_].size();
-    uint8_t ps = 1 - current_particle_set_;
+    uint8_t ps = 0;
+
+    particles_[0].clear();
+    particles_[1].clear();
+
     particles_[ps].resize(num_particles);
 
     // Make all particle have the same map
@@ -586,8 +633,10 @@ bool lama::HybridPFSlam2D::setMaps(FrequencyOccupancyMap* map, SimpleLandmark2DM
         particles_[ps][i].lm  = SimpleLandmark2DMapPtr( new SimpleLandmark2DMap(*(particles_[ps][0].lm)) );
     }
 
-    particles_[current_particle_set_].clear();
     current_particle_set_ = ps;
+    if (!do_mapping_)
+        pauseMapping();
+
     return true;
 }
 
@@ -609,15 +658,11 @@ bool lama::HybridPFSlam2D::UTMtoLL(double x, double y, double& latitude, double&
 
 bool lama::HybridPFSlam2D::globalLocalization(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark>& landmarks)
 {
-    // TODO: minimum number of points as a parameter
-    bool invalid_surface   = surface ? (surface->points.size() < 50) : true;
+    Pose2D landmark_hint;
     bool invalid_landmarks = landmarks.empty();
-
-    if (invalid_surface && invalid_landmarks)
-        return false; // global localization not done
-
-    // First, try with the landmarks
     if (!invalid_landmarks){
+
+        invalid_landmarks  = true;
         auto landmark_map  = getLandmarkMap();
 
         for (auto& landmark : landmarks){
@@ -635,79 +680,30 @@ bool lama::HybridPFSlam2D::globalLocalization(const PointCloudXYZ::Ptr& surface,
             Pose3D loc3d( lm->state.state * measurement.state.inverse() );
 
             // NOTE: The yaw + roll is a hack to solve the ambiguity of the euler angles.
-            Pose2D newloc(loc3d.x(), loc3d.y(), loc3d.yaw() + std::fabs(loc3d.roll()) );
-
-            // RMSE validation if a surface is available
-#if 0       // Currently disabled....
-            if (!invalid_surface){
-                auto distance_map  = getDistanceMap();
-
-                Affine3d moving_tf = Translation3d(surface->sensor_origin_) * surface->sensor_orientation_;
-                Affine3d fixed_tf = Translation3d(Vector3d(newloc.x(),newloc.y(),0.0)) * AngleAxisd(newloc.rotation(), Vector3d::UnitZ());
-
-                Affine3d tf = fixed_tf * moving_tf;
-
-                const size_t num_points = surface->points.size();
-                double rmse = 0.0;
-                for (size_t i = 0; i < num_points; ++i){
-                    Vector3d hit = tf * surface->points[i];
-                    double dist = distance_map->distance(distance_map->w2m(hit));
-                    rmse += dist*dist;
-                } // end for
-                rmse = std::sqrt( rmse / num_points);
-
-                if (rmse > 0.1) continue;
-            }
-
-            // Set the best particle to the new pose
-            auto idx = getBestParticleIdx();
-            particles_[current_particle_set_][idx].pose = newloc;
-
-            // Draw a half circle around the landmark with the remaining particles.
-            const size_t num_particles = particles_[current_particle_set_].size();
-            double angle_step = M_PI / num_particles;
-            double angle = -M_PI*0.5;
-
-            for (size_t i = 1; i < num_particles; ++i){
-
-                Pose3D base(Vector3d(0,0,0), angle = i * angle_step);
-                Pose3D l3d( lm->state.state * (base + measurement).state.inverse() );
-                Pose2D l2d(loc3d.x(), loc3d.y(), loc3d.yaw() + std::fabs(loc3d.roll()) );
-
-                particles_[current_particle_set_][(idx + i) % num_particles].pose = l2d;
-
-                angle += angle_step;
-            }
-#endif
-
-            setPose(newloc);
-            return true;
-
+            landmark_hint = Pose2D(loc3d.x(), loc3d.y(), loc3d.yaw() + std::fabs(loc3d.roll()) );
+            invalid_landmarks = false;
+            break;
         }// end for
 
     }// end if
 
-
-    // Second, try with the laser
-    if (invalid_surface)
-        return false;
-
-    const size_t num_points = surface->points.size();
-
     // Use the best occupancy map
     auto occupancy_map = getOccupancyMap();
-    auto distance_map  = getDistanceMap();
-
     Vector3d min, max;
-    occupancy_map->bounds(min, max);
+
+    if (invalid_landmarks){
+        occupancy_map->bounds(min, max);
+    } else {
+        min.head<2>() = landmark_hint.xy() - Vector2d(2.5, 2.5);
+        max.head<2>() = landmark_hint.xy() + Vector2d(2.5, 2.5);
+    }
 
     Vector3d diff = max - min;
 
-    Pose2D best_pose = getPose();
-    double best_likelihood = -std::numeric_limits<double>::max();
-    double best_rmse = 0;
+    uint8_t ps = (1 - (current_particle_set_ - (!do_mapping_)*2)) + (!do_mapping_)*2;
+    particles_[ps].clear();
 
-    for (uint32_t i = 0; i < gloc_particles_; ++i){
+    for (uint32_t i = 0; i < options_.max_particles; ++i){
 
         double x, y, a;
         int j;
@@ -732,34 +728,14 @@ bool lama::HybridPFSlam2D::globalLocalization(const PointCloudXYZ::Ptr& surface,
         Pose2D p(x, y , a);
         Pose3D p3(Vector3d(x, y, 0.0), a);
 
-        // calculate scan likelihood
-        Affine3d moving_tf = Translation3d(surface->sensor_origin_) * surface->sensor_orientation_;
-        Affine3d fixed_tf = Translation3d(Vector3d(x,y,0.0)) * AngleAxisd(a, Vector3d::UnitZ());
+        particles_[ps].push_back(particles_[current_particle_set_][0]);
 
-        Affine3d tf = fixed_tf * moving_tf;
+        particles_[ps].back().pose   = p;
+        particles_[ps].back().weight = 0;
+        particles_[ps].back().lm_weight = 0;
 
-        double likelihood = 0;
-        double rmse = 0.0;
-        for (size_t i = 0; i < num_points; ++i){
-            Vector3d hit = tf * surface->points[i];
-            double dist = distance_map->distance(distance_map->w2m(hit));
-            likelihood += - (dist*dist) / options_.meas_sigma;
-            rmse += dist*dist;
-        } // end for
-
-        rmse = std::sqrt( rmse / num_points);
-
-        if (likelihood > best_likelihood){
-            best_likelihood = likelihood;
-            best_pose = p;
-            best_rmse = rmse;
-        }
     } // end for
 
-    if (best_rmse > 0.1)
-        return false;
-
-    setPose(best_pose);
     return true;
 }
 
@@ -781,42 +757,49 @@ void lama::HybridPFSlam2D::checkForPossibleGlobalLocalizationTrigger(const Dynam
     // use the landmark map and pose from the best particle
     auto idx = getBestParticleIdx();
     auto landmark_map  = particles_[current_particle_set_][idx].lm.get();
+    auto occupancy_map = particles_[current_particle_set_][idx].occ.get();
     auto p2d = particles_[current_particle_set_][idx].pose;
 
     Pose3D pose(Vector3d(p2d.x(), p2d.y(), 0.0), p2d.rotation());
 
-    for (auto& landmark : landmarks){
+    // runnin on a unknown place? Maybe lost?
+    if (occupancy_map->isUnknown(pose.xyz())){
+            odds += logodds(0.75); // its a hit
+            odds = std::min(logodds(0.97), odds);
+    } else {
+        for (auto& landmark : landmarks){
 
-        uint32_t id = landmark.id;
-        auto lm = landmark_map->get(id);
-        if ( lm == nullptr ) continue; // not in the map
+            uint32_t id = landmark.id;
+            auto lm = landmark_map->get(id);
+            if ( lm == nullptr ) continue; // not in the map
 
-        Matrix6d& sig = lm->covar;
-        auto h = pose - lm->state;
+            Matrix6d& sig = lm->covar;
+            auto h = pose - lm->state;
 
-        Matrix6d H; H.setIdentity();
-        H.topLeftCorner<3,3>() = pose.state.rotationMatrix().transpose();
+            Matrix6d H; H.setIdentity();
+            H.topLeftCorner<3,3>() = pose.state.rotationMatrix().transpose();
 
-        Matrix6d Q = H * sig * H.transpose() + landmark.covar;
-        Matrix6d Qi = Q.inverse();
+            Matrix6d Q = H * sig * H.transpose() + landmark.covar;
+            Matrix6d Qi = Q.inverse();
 
-        // inovation
-        auto inov = h - landmark.measurement;
-        Vector6d diff;
-        diff << landmark.measurement.head<3>() - h.xyz(),
-             inov.state.so3().log();
+            // inovation
+            auto inov = h - landmark.measurement;
+            Vector6d diff;
+            diff << landmark.measurement.head<3>() - h.xyz(),
+                 inov.state.so3().log();
 
-        // Compatibility test with the Mahalanobis distance.
-        double d2 = diff.transpose() * Qi * diff; // squared Mahalanobis distance
-        constexpr double nsigma  = 22.46 * 22.46; // 6 dof 99% sigma
-        if ( d2 > nsigma )
-            odds += logodds(0.75); // hit
-        else
-            odds += logodds(0.4); // miss (NOTE: logodds(0.4) is a negative number)
+            // Compatibility test with the Mahalanobis distance.
+            double d2 = diff.transpose() * Qi * diff; // squared Mahalanobis distance
+            constexpr double nsigma  = 22.46 * 22.46; // 6 dof 99% sigma
+            if ( d2 > nsigma )
+                odds += logodds(0.75); // hit
+            else
+                odds += logodds(0.4); // miss (NOTE: logodds(0.4) is a negative number)
 
-        // clamp the odds
-        odds = std::max(logodds(0.1), std::min(logodds(0.97), odds));
-    }// end for
+            // clamp the odds
+            odds = std::max(logodds(0.1), std::min(logodds(0.97), odds));
+        }// end for
+    }// end if
 
     print("AUTO-GLOC :: probability of being lost %f\n", prob(odds));
 
@@ -824,12 +807,6 @@ void lama::HybridPFSlam2D::checkForPossibleGlobalLocalizationTrigger(const Dynam
         print("AUTO-GLOC :: Global Localization triggered\n");
         odds = logodds(0.1);
         do_global_localization_ = ! globalLocalization(PointCloudXYZ::Ptr(), landmarks);
-
-        if (do_global_localization_ == true)
-            print("AUTO-GLOC :: Global Localization FAIL\n");
-        else
-            print("AUTO-GLOC :: Global Localization SUCCESS\n");
-
     }
 }
 
@@ -888,25 +865,20 @@ double lama::HybridPFSlam2D::calculateLikelihood(const Particle& particle)
     PointCloudXYZ::Ptr surface = current_surface_;
 
     Affine3d moving_tf = Translation3d(surface->sensor_origin_) * surface->sensor_orientation_;
+    Affine3d fixed_tf  = Translation3d(Vector3d(particle.pose.x(), particle.pose.y(), 0.0)) *
+                         AngleAxisd(particle.pose.rotation(), Vector3d::UnitZ());
 
-    Vector3d trans;
-    trans << particle.pose.x(), particle.pose.y(), 0.0;
-
-    Affine3d fixed_tf = Translation3d(trans) * AngleAxisd(particle.pose.rotation(), Vector3d::UnitZ());
-
-    PointCloudXYZ::Ptr cloud(new PointCloudXYZ);
-    const size_t num_points = surface->points.size();
-    //== transform point cloud
     Affine3d tf = fixed_tf * moving_tf;
-    cloud->points.reserve(num_points);
-    for (size_t i = 0; i < num_points; ++i)
-        cloud->points.push_back(tf * surface->points[i]);
-    //==
 
+    const size_t num_points = surface->points.size();
     double likelihood = 0;
-    for (size_t i = 0; i < num_points; ++i){
-        Vector3d hit = cloud->points[i];
-        double dist = particle.dm->distance(hit, 0);
+
+    auto step = (num_points-1) / (99);
+    if ( step < 1 ) step = 1;
+
+    for (size_t i = 0; i < num_points; i += step){
+        Vector3d hit = tf * surface->points[i];
+        double dist = particle.dm->distance(particle.dm->w2m(hit));
         likelihood += - (dist*dist) / options_.meas_sigma;
     } // end for
 
@@ -988,6 +960,9 @@ void lama::HybridPFSlam2D::scanMatch(Particle* particle)
 
     SolverOptions so;
     so.max_iterations = options_.max_iter;
+    if (!do_mapping_)
+        so.max_iterations = 10;
+
     /* so.strategy       = makeStrategy(options_.strategy, Vector2d::Zero()); */
     so.strategy.reset(new GaussNewton);
     so.robust_cost.reset(new CauchyWeight(0.15));
@@ -996,8 +971,9 @@ void lama::HybridPFSlam2D::scanMatch(Particle* particle)
     particle->pose.state = match_surface.getState();
 
     double l = calculateLikelihood(*particle);
-    particle->weight_sum += l;
-    particle->weight     += l;
+    particle->weight += l;
+    if (!do_mapping_)
+        particle->weight_sum += l;
 }
 
 void lama::HybridPFSlam2D::updateParticleMaps(Particle* particle)
@@ -1017,8 +993,6 @@ void lama::HybridPFSlam2D::updateParticleMaps(Particle* particle)
     Affine3d tf = fixed_tf * moving_tf;
 
     // 2. generate the free and occupied positions.
-    VectorVector3ui free;
-
     // generate the ray casts
     for (size_t i = 0; i < num_points; ++i)
     {
@@ -1062,13 +1036,10 @@ void lama::HybridPFSlam2D::updateParticleMaps(Particle* particle)
             if ( changed ) particle->dm->addObstacle(mhit);
         }
 
-        particle->occ->computeRay(particle->occ->w2m(start), mhit, free);
-    }
-
-    const size_t num_free = free.size();
-    for (size_t i = 0; i < num_free; ++i){
-        bool changed = particle->occ->setFree(free[i]);
-        if ( changed ) particle->dm->removeObstacle(free[i]);
+        particle->occ->computeRay(particle->occ->w2m(start), mhit, [&particle](const Vector3ui& coord){
+            bool changed = particle->occ->setFree(coord);
+            if ( changed ) particle->dm->removeObstacle(coord);
+        });
     }
 
     // 3. Update the distance map
@@ -1146,10 +1117,11 @@ void lama::HybridPFSlam2D::updateParticleLandmarks(Particle* particle, const Dyn
             // Calculate weight (or likelihood)
             // The likelihood is the log of a non normalized multivariant gaussian pdf.
             // The normalizer is not needed. The final result is the same and we save some caluculation.
-            double w = -0.5 * diff.transpose() * Q.inverse() * diff;
+            double w = -0.5 * (diff.transpose() * Q.inverse() * diff)(0);
 
             particle->lm_weight += w;
-            particle->weight_sum += w;
+            if (!do_mapping_)
+                particle->weight_sum += w;
         }
 
     }// end for
@@ -1164,7 +1136,8 @@ void lama::HybridPFSlam2D::updateParticleGNSS(Particle* particle, const Vector2d
         return;
 
     particle->lm_weight += w;
-    particle->weight_sum += w;
+    if (!do_mapping_)
+        particle->weight_sum += w;
 }
 
 void lama::HybridPFSlam2D::normalize()
@@ -1213,7 +1186,7 @@ void lama::HybridPFSlam2D::resample(bool reset_weight)
     for (size_t i = 0; i < num_particles; ++i)
         c[i+1] = c[i] + particles_[current_particle_set_][i].normalized_weight;
 
-    uint8_t ps = 1 - current_particle_set_;
+    uint8_t ps = (1 - (current_particle_set_ - (!do_mapping_)*2)) + (!do_mapping_)*2;
     particles_[ps].reserve(options_.max_particles);
 
     kld_.reset();

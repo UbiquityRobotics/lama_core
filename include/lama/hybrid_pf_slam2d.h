@@ -299,12 +299,10 @@ public:
     void setPose(const Pose2D& prior);
 
     // Tell the slam process to do localization but not the mapping part.
-    inline void pauseMapping()
-    { do_mapping_ = false; }
+    void pauseMapping();
 
     // Tell the slam process to do both localization and mapping.
-    inline void resumeMapping()
-    { do_mapping_ = true; }
+    void resumeMapping();
 
     bool setMaps(FrequencyOccupancyMap* map, SimpleLandmark2DMap* lm_map);
 
@@ -324,7 +322,6 @@ private:
 
     double likelihood(const PointCloudXYZ::Ptr& surface, Pose2D& pose);
 
-    double calculateLikelihood(const PointCloudXYZ::Ptr& surface, const Pose2D& pose);
     double calculateLikelihood(const Particle& particle);
 
     bool handleFirstData(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark>& landmarks, const GNSS& gnss);
@@ -336,7 +333,7 @@ private:
     void updateParticleGNSS(Particle* particle, const Vector2d& prior, const Matrix2d& covar);
 
     void normalize();
-    void resample(bool reset_weight = false);
+    void resample(bool reset_weight = true);
 
     void clusterStats();
 
@@ -359,8 +356,9 @@ private:
     Options options_;
     SolverOptions solver_options_;
 
-    std::vector<Particle> particles_[2];
+    std::vector<Particle> particles_[4];
     uint8_t current_particle_set_;
+    uint8_t mapping_particle_set_;
 
     DynamicArray<Cluster> clusters_;
 
@@ -396,6 +394,8 @@ private:
 
     bool do_global_localization_;
     double gloc_particles_;
+
+    bool forced_update_;
 
     std::deque<double> timestamps_;
     PointCloudXYZ::Ptr current_surface_;
