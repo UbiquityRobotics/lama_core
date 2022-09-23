@@ -273,6 +273,9 @@ public:
     inline uint32_t cacheMiss() const
     { return cache_miss_; }
 
+    typedef std::function<void(const Vector3ui&)> RayCallback;
+    void computeRay(const Vector3ui& from, const Vector3ui& to, const RayCallback& callback);
+
     void computeRay(const Vector3ui& from, const Vector3ui& to, VectorVector3ui& sink);
     void computeRay(const Vector3d& from, const Vector3d& to, VectorVector3ui& sink);
 
