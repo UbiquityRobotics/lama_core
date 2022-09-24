@@ -192,8 +192,14 @@ lama::HybridPFSlam2D::~HybridPFSlam2D()
 
 void lama::HybridPFSlam2D::setPrior(const Pose2D& prior)
 {
-    // pose_ = prior;
-    setPose(prior);
+    for (auto& particle : particles_[current_particle_set_]){
+        particle.pose = prior;
+        particle.weight = 0;
+        particle.lm_weight = 0;
+        particle.weight_sum = 0;
+    }
+
+    clusters_.clear();
 }
 
 void lama::HybridPFSlam2D::setPose(const Pose2D& initialpose)
@@ -206,13 +212,17 @@ void lama::HybridPFSlam2D::setPose(const Pose2D& initialpose)
     // This will effectively change the expected value to the initialpose.
     Pose2D offset = pose - initialpose;
 
-    // Apply the offset to all particles.
+    // Apply the offset to all particles and recalculate the cluster
+    kdtree_.reset(particles_[current_particle_set_].size());
     for (auto& particle : particles_[current_particle_set_]){
         particle.pose += offset;
+        kdtree_.insert(particle.pose);
 
         if (options_.keep_pose_history)
             particle.poses.back() = particle.pose;
     }
+
+    clusterStats();
 
     // disable any ongoing global localization
     do_global_localization_ = false;
@@ -221,8 +231,10 @@ void lama::HybridPFSlam2D::setPose(const Pose2D& initialpose)
 
 void lama::HybridPFSlam2D::pauseMapping()
 {
-    do_mapping_ = false;
+    // already paused?
+    if(do_mapping_ == false) return;
 
+    do_mapping_ = false;
     mapping_particle_set_ = current_particle_set_;
 
     // just to make sure
@@ -245,10 +257,21 @@ void lama::HybridPFSlam2D::pauseMapping()
 
 void lama::HybridPFSlam2D::resumeMapping()
 {
+    // already resumed?
+    if(do_mapping_ == true) return;
+
     do_mapping_ = true;
     auto pose   = getPose();
 
     current_particle_set_ = mapping_particle_set_;
+
+    // Because the current_particle_set_ has changed, we need
+    // to recalculate the cluster.
+    kdtree_.reset(particles_[current_particle_set_].size());
+    for (auto& particle : particles_[current_particle_set_])
+        kdtree_.insert(particle.pose);
+    clusterStats();
+
     setPose(pose);
 }
 
