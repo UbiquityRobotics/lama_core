@@ -37,31 +37,12 @@ lama::DynamicDistanceMap::DynamicDistanceMap(double resolution, uint32_t patch_s
     : DistanceMap(resolution, sizeof(distance_t), patch_size, is3d),
       max_sqdist_(100)
 {
-    int idx = 0;
-    for (int x = -1; x <= 1; ++x)
-        for (int y = -1; y <= 1; ++y){
-
-            if (x == 0 && y == 0)
-                continue;
-
-            deltas_[idx][0] = x;
-            deltas_[idx][1] = y;
-            deltas_[idx][2] = 0;
-
-            idx++;
-        }
-
-    for (int x = -1; x <= 1; ++x)
-        for (int y = -1; y <= 1; ++y)
-            for (int z = -1; z <= 1; z += 2){
-
-                deltas_[idx][0] = x;
-                deltas_[idx][1] = y;
-                deltas_[idx][2] = z;
-
-                idx++;
-            }
-
+    deltas_.push_back({ 1,  0, 0});
+    deltas_.push_back({ 0,  1, 0});
+    deltas_.push_back({-1,  0, 0});
+    deltas_.push_back({ 0, -1, 0});
+    deltas_.push_back({ 0, 0,  1});
+    deltas_.push_back({ 0, 0, -1});
 }
 
 lama::DynamicDistanceMap::DynamicDistanceMap(const DynamicDistanceMap& other)
@@ -70,30 +51,12 @@ lama::DynamicDistanceMap::DynamicDistanceMap(const DynamicDistanceMap& other)
 
     max_sqdist_ = other.max_sqdist_;
 
-    int idx = 0;
-    for (int x = -1; x <= 1; ++x)
-        for (int y = -1; y <= 1; ++y){
-
-            if (x == 0 && y == 0)
-                continue;
-
-            deltas_[idx][0] = x;
-            deltas_[idx][1] = y;
-            deltas_[idx][2] = 0;
-
-            idx++;
-        }
-
-    for (int x = -1; x <= 1; ++x)
-        for (int y = -1; y <= 1; ++y)
-            for (int z = -1; z <= 1; z += 2){
-
-                deltas_[idx][0] = x;
-                deltas_[idx][1] = y;
-                deltas_[idx][2] = z;
-
-                idx++;
-            }
+    deltas_.push_back({ 1,  0, 0});
+    deltas_.push_back({ 0,  1, 0});
+    deltas_.push_back({-1,  0, 0});
+    deltas_.push_back({ 0, -1, 0});
+    deltas_.push_back({ 0, 0,  1});
+    deltas_.push_back({ 0, 0, -1});
 }
 
 lama::DynamicDistanceMap::~DynamicDistanceMap()
@@ -220,7 +183,8 @@ uint32_t lama::DynamicDistanceMap::update()
             continue;
 
         if (current->valid_obstacle) {
-            const distance_t* obstacle = (distance_t*) get(current->obstacle);
+            Vector3ui obs = (location.cast<int64_t>() + current->obstacle.cast<int64_t>()).cast<uint32_t>();
+            const distance_t* obstacle = (distance_t*) get(obs);
             if (obstacle == 0)
                 continue;
 
@@ -254,7 +218,7 @@ void lama::DynamicDistanceMap::addObstacle(const Vector3ui& location)
         return; // already an obstacle or already in process of update
 
     cell->sqdist         = 0;
-    cell->obstacle       = location;
+    cell->obstacle       = Vector3s::Zero();
     cell->valid_obstacle = true;
     cell->is_queued      = true;
 
@@ -269,8 +233,8 @@ void lama::DynamicDistanceMap::removeObstacle(const Vector3ui& location)
     if (not (cell->valid_obstacle and cell->sqdist == 0) )
         return; // already not an obstacle or already in process of update
 
-    cell->sqdist         = max_sqdist_;
-    cell->obstacle       = location;
+    cell->sqdist         = 0;
+    cell->obstacle       = Vector3s::Zero();
     cell->valid_obstacle = false;
     cell->is_queued      = true;
 
@@ -280,33 +244,32 @@ void lama::DynamicDistanceMap::removeObstacle(const Vector3ui& location)
 void lama::DynamicDistanceMap::raise(const Vector3ui& location, distance_t& current)
 {
     Vector3ui newloc;
-    const int numOfNeighbor = is_3d ? 26 : 8;
+    const int numOfNeighbor = is_3d ? 6 : 4;
     for (int i = 0; i < numOfNeighbor; ++i){
 
         Vector3l d(deltas_[i][0], deltas_[i][1], deltas_[i][2]);
 
         newloc = (location.cast<int64_t>() + d).cast<uint32_t>();
         distance_t* neighbor = (distance_t*) get(newloc);
-        if (neighbor == 0 or neighbor->is_queued)
+
+        if (neighbor->is_queued or (not neighbor->valid_obstacle))
             continue;
 
-        if (not neighbor->valid_obstacle)
-            continue;
-
-        const distance_t* obstacle = (distance_t*) get(neighbor->obstacle);
+        Vector3ui obs = (newloc.cast<int64_t>() + neighbor->obstacle.cast<int64_t>()).cast<uint32_t>();
+        const distance_t* obstacle = (distance_t*) get(obs);
         if (obstacle == 0)
             continue;
 
         // verify if the closest point is no longer an obstacle.
-        if (not obstacle->sqdist == 0){
+        if (not (obstacle->valid_obstacle)){
             raise_.push({neighbor->sqdist, newloc});
 
-            neighbor->obstacle       = current.obstacle;
+            neighbor->sqdist         = 0;
+            neighbor->obstacle       = Vector3s::Zero();
             neighbor->valid_obstacle = false;
             neighbor->is_queued      = true;
         }else if(not neighbor->is_queued){
             lower_.push({neighbor->sqdist, newloc});
-
             neighbor->is_queued = true;
         }
 
@@ -317,43 +280,48 @@ void lama::DynamicDistanceMap::raise(const Vector3ui& location, distance_t& curr
 
 void lama::DynamicDistanceMap::lower(const Vector3ui& location, distance_t& current)
 {
-    // motion direction
-    Vector3l m = location.cast<int64_t>() - current.obstacle.cast<int64_t>();
+    if (not current.is_queued)
+        // This happens when a cell already in the queue is affected by a closer obstacle.
+        // Therefore, we can safely skip this one because it was already processed.
+        return;
 
-    Vector3ui newloc;
-    const int numOfNeighbor = is_3d ? 26 : 8;
+    Vector3l newloc;
+    const int numOfNeighbor = is_3d ? 6 : 4;
     for (int i = 0; i < numOfNeighbor; ++i){
 
         // deltas
         Vector3l d(deltas_[i][0], deltas_[i][1], deltas_[i][2]);
 
         // only update away from the obstacle
-        if ( ( d.cwiseProduct(m).array() < 0).any() )
+        if ( ( d.cwiseProduct(current.obstacle.cast<int64_t>()).array() > 0).any() )
             continue;
 
-        newloc = (location.cast<int64_t>() + d).cast<uint32_t>();
-        distance_t* neighbor = (distance_t*) get(newloc);
-        if (neighbor == 0 or neighbor->is_queued)
-            continue;
+        newloc = (location.cast<int64_t>() + d);
+        distance_t* neighbor = (distance_t*) get(newloc.cast<uint32_t>());
 
-        Vector3l dist = (newloc.cast<int64_t>() - current.obstacle.cast<int64_t>());
+        // Absolute position of the current obstacle
+        Vector3l obs = (location.cast<int64_t>() + current.obstacle.cast<int64_t>());
+
+        Vector3l dist = (newloc - obs);
         uint32_t new_sqdist = dist.squaredNorm();
         uint32_t cmp_sqdist = neighbor->valid_obstacle ? neighbor->sqdist : max_sqdist_;
 
         bool overwrite = (new_sqdist < cmp_sqdist);
 
         if(not overwrite && new_sqdist == neighbor->sqdist){
-            const distance_t* obstacle = (distance_t*) get(neighbor->obstacle);
+            // Absolute position of the neighbor obstacle
+            Vector3ui nobs = (newloc + neighbor->obstacle.cast<int64_t>()).cast<uint32_t>();
+            const distance_t* obstacle = (distance_t*) get(nobs);
             if (not neighbor->valid_obstacle || (obstacle != 0 && not (obstacle->valid_obstacle and obstacle->sqdist == 0) ))
                 overwrite = true;
         }
 
         if ( overwrite ){
-            lower_.push({new_sqdist, newloc});
+            lower_.push({new_sqdist, newloc.cast<uint32_t>()});
 
             neighbor->sqdist         = new_sqdist;
             neighbor->valid_obstacle = true;
-            neighbor->obstacle       = current.obstacle;
+            neighbor->obstacle       = (obs - newloc).cast<int16_t>();
             neighbor->is_queued      = true;
         }
     }// end for
