@@ -615,6 +615,7 @@ bool lama::HybridPFSlam2D::setMaps(FrequencyOccupancyMap* map, SimpleLandmark2DM
         return false;
 
     const uint32_t num_particles = particles_[current_particle_set_].size();
+    const double weight =  1.0 / num_particles;
     uint8_t ps = 0;
 
     particles_[0].clear();
@@ -628,7 +629,9 @@ bool lama::HybridPFSlam2D::setMaps(FrequencyOccupancyMap* map, SimpleLandmark2DM
     particles_[ps][0].pose = pose_;
 
     particles_[ps][0].weight     = 0.0;
+    particles_[ps][0].lm_weight  = 0.0;
     particles_[ps][0].weight_sum = 0.0;
+    particles_[ps][0].normalized_weight = weight;
     particles_[ps][0].dm = DynamicDistanceMapPtr(new DynamicDistanceMap(options_.resolution, options_.patch_size));
     particles_[ps][0].dm->setMaxDistance(options_.l2_max);
     particles_[ps][0].dm->useCompression(options_.use_compression,  options_.cache_size, options_.calgorithm);
@@ -651,6 +654,7 @@ bool lama::HybridPFSlam2D::setMaps(FrequencyOccupancyMap* map, SimpleLandmark2DM
         particles_[ps][i].weight     = 0.0;
         particles_[ps][i].lm_weight  = 0.0;
         particles_[ps][i].weight_sum = 0.0;
+        particles_[ps][i].normalized_weight = weight;
 
         particles_[ps][i].occ = FrequencyOccupancyMapPtr(new FrequencyOccupancyMap(*particles_[ps][0].occ));
         particles_[ps][i].dm  = DynamicDistanceMapPtr(new DynamicDistanceMap(*particles_[ps][0].dm));
