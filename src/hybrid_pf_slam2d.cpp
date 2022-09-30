@@ -192,7 +192,14 @@ lama::HybridPFSlam2D::~HybridPFSlam2D()
 
 void lama::HybridPFSlam2D::setPrior(const Pose2D& prior)
 {
-    setPose(prior);
+    for (auto& particle : particles_[current_particle_set_]){
+        particle.pose = prior;
+        particle.weight = 0;
+        particle.lm_weight = 0;
+        particle.weight_sum = 0;
+    }
+
+    clusters_.clear();
 }
 
 void lama::HybridPFSlam2D::setPose(const Pose2D& initialpose)
@@ -642,6 +649,7 @@ bool lama::HybridPFSlam2D::setMaps(FrequencyOccupancyMap* map, SimpleLandmark2DM
         particles_[ps][i].pose = pose_;
 
         particles_[ps][i].weight     = 0.0;
+        particles_[ps][i].lm_weight  = 0.0;
         particles_[ps][i].weight_sum = 0.0;
 
         particles_[ps][i].occ = FrequencyOccupancyMapPtr(new FrequencyOccupancyMap(*particles_[ps][0].occ));
@@ -650,8 +658,12 @@ bool lama::HybridPFSlam2D::setMaps(FrequencyOccupancyMap* map, SimpleLandmark2DM
     }
 
     current_particle_set_ = ps;
-    if (!do_mapping_)
-        pauseMapping();
+    // force mapping pause
+    do_mapping_ = true;
+    pauseMapping();
+
+    has_first_scan_ = true;
+    has_first_landmarks_ = true;
 
     return true;
 }
