@@ -192,14 +192,7 @@ lama::HybridPFSlam2D::~HybridPFSlam2D()
 
 void lama::HybridPFSlam2D::setPrior(const Pose2D& prior)
 {
-    for (auto& particle : particles_[current_particle_set_]){
-        particle.pose = prior;
-        particle.weight = 0;
-        particle.lm_weight = 0;
-        particle.weight_sum = 0;
-    }
-
-    clusters_.clear();
+    setPose(prior);
 }
 
 void lama::HybridPFSlam2D::setPose(const Pose2D& initialpose)
