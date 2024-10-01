@@ -2,6 +2,7 @@
  * IRIS Localization and Mapping (LaMa)
  *
  * Copyright (c) 2019-today, Eurico Pedrosa, University of Aveiro - Portugal
+ * Copyright (c) 2021, Ubiquity Robotics
  * All rights reserved.
  * License: New BSD
  *
@@ -40,10 +41,14 @@
 #include "pose2d.h"
 #include "nlls/solver.h"
 
-#include "lama/kdtree.h"
-#include "lama/kld_sampling.h"
 #include "sdm/dynamic_distance_map.h"
 #include "sdm/frequency_occupancy_map.h"
+
+#include "lama/kdtree.h"
+#include "lama/kld_sampling.h"
+
+#include "lama/gnss.h"
+#include "lama/simple_landmark2d_map.h"
 
 #include <Eigen/StdVector>
 
@@ -51,7 +56,7 @@ namespace lama {
 
 struct ThreadPool;
 
-class PFSlam2D {
+class HybridPFSlam2D {
 public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
@@ -63,14 +68,19 @@ public:
     typedef std::shared_ptr<DynamicDistanceMap>    DynamicDistanceMapPtr;
     typedef std::shared_ptr<FrequencyOccupancyMap> FrequencyOccupancyMapPtr;
 
+    typedef std::shared_ptr<SimpleLandmark2DMap> SimpleLandmark2DMapPtr;
+
 
 public:
 
     struct Particle {
         EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
-        // The weight of the particle
-        double weight;
+        // The weight of the particle.
+        // from the occupancy grids
+        double weight = 0.0;
+        // from the landmarks
+        double lm_weight = 0.0;
 
         double normalized_weight;
 
@@ -84,6 +94,9 @@ public:
 
         DynamicDistanceMapPtr    dm;
         FrequencyOccupancyMapPtr occ;
+
+        // The landmark map.
+        SimpleLandmark2DMapPtr lm;
 
     };
 
@@ -105,7 +118,6 @@ public:
         Vector4d m = Vector4d::Zero();
         Matrix2d c = Matrix2d::Zero();
     };
-
 
     struct Summary {
         /// When it happend.
@@ -150,14 +162,17 @@ public:
     inline void probeMem()
     { summary->memory.push_back(getMemoryUsage()); }
 
+    inline uint32_t getNumParticles() const
+    { return particles_[current_particle_set_].size(); }
+
     // All SLAM options are in one place for easy access and passing.
     struct Options {
         Options(){}
 
         /// The number of particles to use
-        uint32_t particles = 20;
-        /// The number of maximum particles to use
-        uint32_t max_particles = 40;
+        uint32_t particles;
+        /// Maximum number of particles to use
+        uint32_t max_particles;
         /// How much the rotation affects rotation.
         double srr = 0.1;
         /// How much the translation affects rotation.
@@ -168,8 +183,17 @@ public:
         double srt = 0.2;
         /// Measurement confidence.
         double meas_sigma = 0.05;
-        /// Use this to smooth the measurements likelihood.
+        /// Use this to smooth the measurements likelihood of the laser.
         double meas_sigma_gain = 3;
+        /// Use this to smooth the measurements likelihood of the landmarks and GNSS
+        double landmark_gain = 0.05;
+        /// Minimum variance of the gps
+        double gnss_min_var = 0.025;
+        /// If set to true, the gnss "exact" position
+        /// will be injected in the particle set.
+        bool gnss_injection = false;
+        /// Probability of injecting the gnss "exact" positon.
+        double gnss_injection_prob = 0.01;
         /// The ammount of displacement that the system must
         /// gather before any update takes place.
         double trans_thresh = 0.5;
@@ -204,13 +228,19 @@ public:
         uint32_t cache_size = 100;
         /// Compression algorithm to use when compression is activated
         std::string calgorithm = "lz4";
+        /// Do compatibility test* using the Mahalanobis distance.
+        bool do_compatibility_test = true;
+        /// number of particles used for global localization.
+        int32_t gloc_particles = 3000;
         /// Save data to create an execution summary.
         bool create_summary = false;
+        /// Keep particle pose history
+        bool keep_pose_history = false;
     };
 
-    PFSlam2D(const Options& options = Options());
+    HybridPFSlam2D(const Options& options = Options());
 
-    virtual ~PFSlam2D();
+    virtual ~HybridPFSlam2D();
 
     inline const Options& getOptions() const
     {
@@ -220,7 +250,9 @@ public:
     uint64_t getMemoryUsage() const;
     uint64_t getMemoryUsage(uint64_t& occmem, uint64_t& dmmem) const;
 
-    bool update(const PointCloudXYZ::Ptr& surface, const Pose2D& odometry, double timestamp);
+    // Update the SLAM system.
+    bool update(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark>& landmarks,
+            const GNSS& gnss, const Pose2D& odometry, double timestamp);
 
     size_t getBestParticleIdx() const;
 
@@ -233,20 +265,28 @@ public:
     inline const std::vector<Particle>& getParticles() const
     { return particles_[current_particle_set_]; }
 
-    const FrequencyOccupancyMap* getOccupancyMap() const
+    inline const FrequencyOccupancyMap* getOccupancyMap() const
     {
-        if (!has_first_scan) return nullptr;
+        if (!has_first_scan_) return nullptr;
 
         size_t pidx = getBestParticleIdx();
         return particles_[current_particle_set_][pidx].occ.get();
     }
 
-    const DynamicDistanceMap* getDistanceMap() const
+    inline const DynamicDistanceMap* getDistanceMap() const
     {
-        if (!has_first_scan) return nullptr;
+        if (!has_first_scan_) return nullptr;
 
         size_t pidx = getBestParticleIdx();
         return particles_[current_particle_set_][pidx].dm.get();
+    }
+
+    inline const SimpleLandmark2DMap* getLandmarkMap() const
+    {
+        if (!has_first_landmarks_) return nullptr;
+
+        size_t pidx = getBestParticleIdx();
+        return particles_[current_particle_set_][pidx].lm.get();
     }
 
     void saveOccImage(const std::string& name) const;
@@ -256,40 +296,87 @@ public:
 
     void setPrior(const Pose2D& prior);
 
+    void setPose(const Pose2D& prior);
+
     // Tell the slam process to do localization but not the mapping part.
-    inline void pauseMapping()
-    { do_mapping_ = false; }
+    void pauseMapping();
 
     // Tell the slam process to do both localization and mapping.
-    inline void resumeMapping()
-    { do_mapping_ = true; }
+    void resumeMapping();
+
+    bool setMaps(FrequencyOccupancyMap* map, SimpleLandmark2DMap* lm_map);
+
+    inline void triggerGlobalLocalization()
+    { do_global_localization_ = true; }
+
+    // Convert local map coordinates to global latitude/longitude coordinates.
+    // Returns false if the navsat reference position hasn't been determined yet.
+    bool UTMtoLL(double x, double y, double& latitude, double& longitude);
+
+    inline const Pose2D& getGNSSRef() const
+    { return gnss_ref_pose_; }
+
+    inline const Pose2D& getGNSSOffset() const
+    { return gnss_offset_; }
+
+    inline const std::string& getGNSSZone() const
+    { return gnss_zone_; }
+
+    inline void setGNSSInfo(const Pose2D& ref, const Pose2D& offset, const std::string& zone)
+    {
+        gnss_ref_pose_ = ref;
+        gnss_offset_   = offset;
+        gnss_zone_     = zone;
+        has_first_gnss_     = true;
+        gnss_needs_heading_ = false;
+    }
 
 private:
 
-    StrategyPtr makeStrategy(const std::string& name);
-    RobustCostPtr makeRobust(const std::string& name);
+    StrategyPtr makeStrategy(const std::string& name, const VectorXd& parameters);
+    RobustCostPtr makeRobust(const std::string& name, const double& param);
 
-    void drawFromMotion(const Pose2D& delta, Pose2D& pose);
+    void drawFromMotion(const Pose2D& delta, const Pose2D& old_pose, Pose2D& pose);
 
     double likelihood(const PointCloudXYZ::Ptr& surface, Pose2D& pose);
 
-    double calculateLikelihood(const PointCloudXYZ::Ptr& surface, const Pose2D& pose);
     double calculateLikelihood(const Particle& particle);
+
+    bool handleFirstData(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark>& landmarks, const GNSS& gnss);
 
     void scanMatch(Particle* particle);
     void updateParticleMaps(Particle* particle);
 
+    void updateParticleLandmarks(Particle* particle, const DynamicArray<Landmark>& landmarks);
+    void updateParticleGNSS(Particle* particle, const Vector2d& prior, const Matrix2d& covar);
+
     void normalize();
-    void resample();
+    void resample(bool reset_weight = true);
 
     void clusterStats();
+
+    // Do global localization.
+    //
+    // Usually, global localization with a particle filter is solved by uniformly distribute
+    // the particles over the map's free space, and, as the particle filter evolves, the particles
+    // will converge to the correct pose. This simply cannot be done for a SLAM algorithm.
+    // Instead of letting the filter converge, we use the pose of particle with the highest weight
+    // to set a new initial pose.
+    //
+    // WARNING: Calling this function does not guarantee to find the correct global pose. You may need
+    // to call this function more than once to find the correct pose. It is up to you to evaluate if the
+    // global pose is correct or not.
+    bool globalLocalization(const PointCloudXYZ::Ptr& surface, const DynamicArray<Landmark>& landmarks);
+
+    void checkForPossibleGlobalLocalizationTrigger(const DynamicArray<Landmark>& landmarks);
 
 private:
     Options options_;
     SolverOptions solver_options_;
 
-    std::vector<Particle> particles_[2];
+    std::vector<Particle> particles_[4];
     uint8_t current_particle_set_;
+    uint8_t mapping_particle_set_;
 
     DynamicArray<Cluster> clusters_;
 
@@ -299,18 +386,34 @@ private:
     Pose2D odom_;
     Pose2D pose_;
 
+    Pose2D gnss_ref_pose_;
+    Pose2D gnss_offset_;
+    Pose2D gnss_pose_;
+
+    Vector2f gnss_ref_;
+    std::string gnss_zone_;
+
     double acc_trans_;
     double acc_rot_;
-    bool   has_first_scan;
+
+    bool has_first_scan_      = false;
+    bool has_first_landmarks_ = false;
+    bool has_first_gnss_      = false;
+    bool gnss_needs_heading_  = true;
+
+    bool valid_surface_;
 
     // Controls the execution of the mapping process
     bool do_mapping_;
 
     double truncated_ray_;
     double truncated_range_;
-    double max_weight_;
-    double delta_free_;
     double neff_;
+
+    bool do_global_localization_;
+    double gloc_particles_;
+
+    bool forced_update_;
 
     std::deque<double> timestamps_;
     PointCloudXYZ::Ptr current_surface_;

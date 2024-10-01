@@ -111,6 +111,7 @@ lama::PFSlam2D::PFSlam2D(const Options& options)
     /* solver_options_.robust_cost    = makeRobust("cauchy", 0.25); */
     solver_options_.robust_cost.reset(new CauchyWeight(0.15));
 
+    neff_ = options.particles;
     has_first_scan = false;
     truncated_ray_ = options.truncated_ray;
     truncated_range_ = options.truncated_range;
@@ -135,6 +136,8 @@ lama::PFSlam2D::PFSlam2D(const Options& options)
 
     if (options.create_summary)
         summary = new Summary();
+
+    kld_.init(options.particles, options_.max_particles, 0.04);
 }
 
 lama::PFSlam2D::~PFSlam2D()
@@ -152,7 +155,7 @@ uint64_t lama::PFSlam2D::getMemoryUsage() const
 {
     uint64_t total = 0;
 
-    const uint32_t num_particles = options_.particles;
+    const uint32_t num_particles = particles_[current_particle_set_].size();
     for (uint32_t i = 0; i < num_particles; ++i){
         total += particles_[current_particle_set_][i].dm->memory();
         total += particles_[current_particle_set_][i].occ->memory();
@@ -166,7 +169,7 @@ uint64_t lama::PFSlam2D::getMemoryUsage(uint64_t& occmem, uint64_t& dmmem) const
     occmem = 0;
     dmmem  = 0;
 
-    const uint32_t num_particles = options_.particles;
+    const uint32_t num_particles = particles_[current_particle_set_].size();
     for (uint32_t i = 0; i < num_particles; ++i){
         occmem += particles_[current_particle_set_][0].occ->memory();
         dmmem  += particles_[current_particle_set_][0].dm->memory();
@@ -182,7 +185,7 @@ bool lama::PFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Pose2D& odo
 
     current_surface_ = surface;
 
-    if (not has_first_scan){
+    if (not has_first_scan and do_mapping_){
         odom_ = odometry;
         timestamps_.push_back(timestamp);
 
@@ -231,7 +234,7 @@ bool lama::PFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Pose2D& odo
     Pose2D odelta = odom_ - odometry;
     odom_ = odometry;
 
-    const uint32_t num_particles = options_.particles;
+    uint32_t num_particles = particles_[current_particle_set_].size();
     for (uint32_t i = 0; i < num_particles; ++i)
         drawFromMotion(odelta, particles_[current_particle_set_][i].pose);
 
@@ -277,29 +280,39 @@ bool lama::PFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Pose2D& odo
         probeNTime(local_timer.elapsed());
 
     // 4. resample if needed
-    if (neff_ < (options_.particles*0.5)){
+    if (neff_ < (num_particles*0.5)){
         local_timer.reset();
 
         resample();
 
         if (summary)
             probeRTime(local_timer.elapsed());
+    } else {
+        kdtree_.reset(num_particles);
+        for (auto& p : particles_[current_particle_set_])
+            kdtree_.insert(p.pose);
     }
+
+    clusterStats();
 
     // 5. Update maps
     local_timer.reset();
 
-    if (thread_pool_){
-        for (uint32_t i = 0; i < num_particles; ++i)
-            thread_pool_->enqueue([this, i](){
-                updateParticleMaps(&(particles_[current_particle_set_][i]));
-            });
+    if (do_mapping_){
+        // the number of particles may have change
+        num_particles = particles_[current_particle_set_].size();
+        if (thread_pool_){
+            for (uint32_t i = 0; i < num_particles; ++i)
+                thread_pool_->enqueue([this, i](){
+                        updateParticleMaps(&(particles_[current_particle_set_][i]));
+                        });
 
-        thread_pool_->wait();
-    } else {
-        for (uint32_t i = 0; i < num_particles; ++i)
-            updateParticleMaps(&particles_[current_particle_set_][i]);
-    }
+            thread_pool_->wait();
+        } else {
+            for (uint32_t i = 0; i < num_particles; ++i)
+                updateParticleMaps(&particles_[current_particle_set_][i]);
+        }// end if
+    }// end if (do_mapping_)
 
     if (summary){
         probeMTime(local_timer.elapsed());
@@ -313,7 +326,7 @@ bool lama::PFSlam2D::update(const PointCloudXYZ::Ptr& surface, const Pose2D& odo
 
 size_t lama::PFSlam2D::getBestParticleIdx() const
 {
-    const uint32_t num_particles = options_.particles;
+    const uint32_t num_particles = particles_[current_particle_set_].size();
 
     size_t best_idx = 0;
     double best_ws  = particles_[current_particle_set_][0].weight_sum;
@@ -331,8 +344,36 @@ size_t lama::PFSlam2D::getBestParticleIdx() const
 
 lama::Pose2D lama::PFSlam2D::getPose() const
 {
-    size_t pidx = getBestParticleIdx();
-    return particles_[current_particle_set_][pidx].pose;
+    if (clusters_.size() == 0)
+        return particles_[current_particle_set_][0].pose;
+
+    double best = clusters_[0].weight;
+    size_t idx  = 0;
+    for (size_t i = 1; i < clusters_.size(); ++i)
+        if (clusters_[i].weight > best){
+            best = clusters_[i].weight;
+            idx = i;
+        }
+
+    return clusters_[idx].pose;
+}
+
+Eigen::Matrix3d lama::PFSlam2D::getCovar() const
+{
+    if (clusters_.size() == 0){
+        Matrix3d covar = Matrix3d::Identity() * 999;
+        return covar;
+    }
+
+    double best = clusters_[0].weight;
+    size_t idx  = 0;
+    for (size_t i = 1; i < clusters_.size(); ++i)
+        if (clusters_[i].weight > best){
+            best = clusters_[i].weight;
+            idx = i;
+        }
+
+    return clusters_[idx].covar;
 }
 
 void lama::PFSlam2D::saveOccImage(const std::string& name) const
@@ -368,19 +409,19 @@ void lama::PFSlam2D::drawFromMotion(const Pose2D& delta, Pose2D& pose)
     double sxy = 0.3 * options_.stt;
 
     sigma = options_.stt * std::fabs(delta.x())   +
-            options_.str * std::fabs(delta.rotation()) +
+            options_.srt * std::fabs(delta.rotation()) +
             sxy * std::fabs(delta.y());
 
     x = delta.x() + random::normal(sigma);
 
     sigma = options_.stt * std::fabs(delta.y())   +
-            options_.str * std::fabs(delta.rotation()) +
+            options_.srt * std::fabs(delta.rotation()) +
             sxy * std::fabs(delta.x());
 
     y = delta.y() + random::normal(sigma);
 
     sigma = options_.srr * std::fabs(delta.rotation()) +
-            options_.srt * delta.xy().norm();
+            options_.str * delta.xy().norm();
 
     yaw = delta.rotation() + random::normal(sigma);
     yaw = std::fmod(yaw, 2*M_PI);
@@ -511,9 +552,9 @@ void lama::PFSlam2D::updateParticleMaps(Particle* particle)
 void lama::PFSlam2D::normalize()
 {
     /* double gain = options_.meas_sigma_gain; //1.0 / (options_.meas_sigma_gain * options_.particles); */
-    double gain = 1.0 / (options_.meas_sigma_gain * options_.particles);
+    const uint32_t num_particles = particles_[current_particle_set_].size();
+    double gain = 1.0 / (options_.meas_sigma_gain * num_particles);
     double max_l  = particles_[current_particle_set_][0].weight;
-    const uint32_t num_particles = options_.particles;
     for (uint32_t i = 1; i < num_particles; ++i)
         if (max_l < particles_[current_particle_set_][i].weight)
             max_l = particles_[current_particle_set_][i].weight;
@@ -536,40 +577,96 @@ void lama::PFSlam2D::normalize()
 
 void lama::PFSlam2D::resample()
 {
-    const uint32_t num_particles = options_.particles;
-    std::vector<int32_t> sample_idx(num_particles);
+    const uint32_t num_particles = particles_[current_particle_set_].size();
+    DynamicArray<double> c(num_particles + 1);
 
-    double interval = 1.0 / (double)num_particles;
-
-    double target = interval * random::uniform();
-    double   cw  = 0.0;
-    uint32_t n   = 0;
-    for (size_t i = 0; i < num_particles; ++i){
-        cw += particles_[current_particle_set_][i].normalized_weight;
-
-        while( cw > target){
-            sample_idx[n++]=i;
-            target += interval;
-        }
-    }
-
-    // generate a new set of particles
+    c[0] = 0.0;
+    for (size_t i = 0; i < num_particles; ++i)
+        c[i+1] = c[i] + particles_[current_particle_set_][i].normalized_weight;
 
     uint8_t ps = 1 - current_particle_set_;
-    particles_[ps].resize(num_particles);
+    particles_[ps].reserve(options_.max_particles);
 
-    for (size_t i = 0; i < num_particles; ++i) {
-        uint32_t idx = sample_idx[i];;
+    kld_.reset();
+    kdtree_.reset(kld_.samples_max);
+    for (size_t i = 0; i < kld_.samples_max; ++i){
 
-        particles_[ps][i] = particles_[current_particle_set_][ idx ];
-        particles_[ps][i].weight  = 0.0;
-        particles_[ps][i].weight_sum  = particles_[current_particle_set_][idx].weight_sum;
+        double r = random::uniform();
+        uint32_t idx;
+        for (idx = 0; idx < num_particles; ++idx)
+            if ((c[idx] <= r) && (r < c[idx+1]))
+                break;
 
-        particles_[ps][i].dm  = DynamicDistanceMapPtr(new DynamicDistanceMap(*(particles_[current_particle_set_][idx].dm)));
-        particles_[ps][i].occ = FrequencyOccupancyMapPtr(new FrequencyOccupancyMap(*(particles_[current_particle_set_][idx].occ)));
+        // seed 822665307
+        particles_[ps].push_back( Particle{} );
+        particles_[ps].back() = particles_[current_particle_set_][idx];
+        particles_[ps].back().weight = 0.0;
+
+        particles_[ps].back().dm  = DynamicDistanceMapPtr(new DynamicDistanceMap(*(particles_[current_particle_set_][idx].dm)));
+        particles_[ps].back().occ = FrequencyOccupancyMapPtr(new FrequencyOccupancyMap(*(particles_[current_particle_set_][idx].occ)));
+
+        auto& pose = particles_[ps].back().pose;
+
+        kdtree_.insert(pose);
+        auto kld_samples = kld_.resample_limit(kdtree_.num_leafs);
+
+        if (particles_[ps].size() >= kld_samples) break;
     }
 
     particles_[current_particle_set_].clear();
     current_particle_set_ = ps;
 }
+
+void lama::PFSlam2D::clusterStats()
+{
+    kdtree_.cluster();
+
+    clusters_.clear();
+    clusters_.resize(kdtree_.num_clusters);
+
+    for (auto& particle : particles_[current_particle_set_]){
+
+        auto cidx = kdtree_.getCluster(particle.pose);
+        if ( cidx == -1 )
+            continue;
+
+        Cluster& cluster = clusters_[cidx];
+
+        // accumulate the weight
+        cluster.weight += particle.normalized_weight;
+
+        // compute mean
+        cluster.m[0] += particle.normalized_weight * particle.pose.x();
+        cluster.m[1] += particle.normalized_weight * particle.pose.y();
+        cluster.m[2] += particle.normalized_weight * std::cos(particle.pose.rotation());
+        cluster.m[3] += particle.normalized_weight * std::sin(particle.pose.rotation());
+
+        // compute covar of linear compomenets
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j)
+                cluster.c(i,j) += particle.normalized_weight * particle.pose.xyr()(i) * particle.pose.xyr()(j);
+
+    }// end for
+
+    // Normalize each cluster
+    for (auto& cluster : clusters_){
+
+        // First the mean
+        Vector3d mean;
+        mean << cluster.m[0] / cluster.weight,
+                cluster.m[1] / cluster.weight,
+                std::atan2(cluster.m[3], cluster.m[2]);
+
+        cluster.pose = Pose2D(mean);
+
+        // Now the covariance for the linear components
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j)
+                cluster.covar(i,j) = cluster.c(i,j) / cluster.weight - mean(i) * mean(j);
+
+        // Circular covariance
+        cluster.covar(2,2) = -2 * std::log(cluster.m.tail<2>().norm());
+    }
+}
+
 

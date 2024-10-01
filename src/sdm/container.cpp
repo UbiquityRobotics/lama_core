@@ -36,16 +36,12 @@
 #include "lama/print.h"
 #include "lama/sdm/container.h"
 
-lama::Container::Container(uint32_t log2dim, bool is3d)
-    : NBITS(log2dim)
-    , SIZE(1u << ((2 + 1*is3d) * NBITS))
-    , WORD_COUNT(std::max(uint32_t(SIZE >> 6), uint32_t(1)))
+lama::Container::Container(uint32_t log2dim)
+    : mask(log2dim)
 { }
 
 lama::Container::Container(const Container& other)
-    : NBITS(other.NBITS)
-    , SIZE(other.SIZE)
-    , WORD_COUNT(other.WORD_COUNT)
+    : mask(other.mask)
 {
     if (other.data == nullptr)
         return;
@@ -64,10 +60,8 @@ lama::Container::Container(const Container& other)
 
 lama::Container::~Container()
 {
-    if (data != nullptr){
+    if (data != nullptr)
         free(data);
-        free(mask);
-    }
 }
 
 bool lama::Container::ok() const
@@ -158,7 +152,7 @@ void lama::Container::write(BufferCompressor* bc, std::ofstream& stream) const
     }//end if
 
     stream.write((char*)write_data, memory_size);
-    stream.write((char*)mask, sizeof(uint64_t) * WORD_COUNT);
+    stream.write((char*)mask.mWords, sizeof(uint64_t) * mask.wordCount());
 
     if (write_data != data)
         free(write_data);
@@ -172,6 +166,6 @@ void lama::Container::read(std::ifstream& stream)
     }
 
     stream.read((char*)data, memory_size);
-    stream.read((char*)mask, sizeof(uint64_t)*WORD_COUNT);
+    stream.read((char*)mask.mWords, sizeof(uint64_t)*mask.wordCount());
 }
 

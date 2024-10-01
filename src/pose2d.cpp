@@ -46,7 +46,7 @@ lama::Pose2D::Pose2D(const Vector2d& xy, const double& rotation)
 {}
 
 lama::Pose2D::Pose2D(const Vector3d& xyr)
-    : state(xyr[2], xyr.tail<2>())
+    : state(xyr[2], xyr.head<2>())
 {}
 
 lama::Pose2D::Pose2D(const Affine2d& transformation)
@@ -95,7 +95,7 @@ lama::Pose2D& lama::Pose2D::operator-=(const lama::Pose2D& other)
     return *this;
 }
 
-lama::Vector2d lama::Pose2D::operator*(const Vector2d& point)
+lama::Vector2d lama::Pose2D::operator*(const Vector2d& point) const
 {
     return state*point;
 }

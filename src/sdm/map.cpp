@@ -44,8 +44,7 @@ lama::Map::Map(double resolution, size_t cell_size, uint32_t patch_size, bool is
     cell_memory_size(cell_size),
     patch_length( 1 << ((int)log2(patch_size)) ),
     patch_volume( patch_length * patch_length * (is3d ? patch_length : 1.0)),
-    is_3d(is3d),
-    MASK3D(~(is_3d-1))
+    is_3d(is3d)
 {
     log2dim = (int)log2(patch_length);
 
@@ -209,17 +208,15 @@ void lama::Map::computeRay(const Vector3ui& from, const Vector3ui& to, const Ray
     int n = delta.maxCoeff();
 
     // maximum change of any coordinate
-    for (int i = 0; i < n-1; ++i){
+    for (int i = 0; i < n - 1; ++i){
         // update errors
         error += delta;
 
-        for (int j = 0; j < 3; ++j){
-            if ((error(j) << 1) < n)
-                continue;
-
-            coord(j) += step(j);
-            error(j) -= n;
-        }
+        for (int j = 0; j < 3; ++j)
+            if ( (error(j) << 1) >= n ){
+                coord(j) += step(j);
+                error(j) -= n;
+            }
 
         // save the coordinate
         callback(coord.cast<uint32_t>() );
@@ -353,7 +350,7 @@ void lama::Map::visit_all_cells(const CellWalker& walker) const
 {
     for (auto& it : patches){
         Vector3ui anchor = p2m(it.first);
-        for (auto cell = it.second->begin_on(); cell; ++cell)
+        for (auto cell = it.second->mask.beginOn(); cell; ++cell)
             walker(anchor + c2m(*cell));
     }// end for_all
 }
@@ -381,8 +378,8 @@ uint8_t* lama::Map::get(const Vector3ui& coordinates)
             auto it = patches.find(idx);
             if (it == patches.end()){
                 // first time reference
-                it = patches.insert(std::make_pair(idx, COWPtr< Container >(new Container(log2dim, is_3d))) ).first;
-                it->second->alloc(cell_memory_size);
+                it = patches.insert(std::make_pair(idx, COWPtr< Container >(new Container(log2dim))) ).first;
+                it->second->alloc(patch_volume, cell_memory_size);
 
                 p = &(it->second);
                 cache_miss_--; // a brand new patch is not a cache miss
@@ -400,8 +397,8 @@ uint8_t* lama::Map::get(const Vector3ui& coordinates)
     if (prev_idx_ != idx or prev_patch_ == nullptr) {
         auto it = patches.find(idx);
         if (it == patches.end()){
-            it = patches.insert(std::make_pair(idx, COWPtr< Container >(new Container(log2dim, is_3d))) ).first;
-            it->second->alloc(cell_memory_size);
+            it = patches.insert(std::make_pair(idx, COWPtr< Container >(new Container(log2dim))) ).first;
+            it->second->alloc(patch_volume, cell_memory_size);
         }
 
         prev_idx_ = idx;
@@ -566,8 +563,8 @@ bool lama::Map::read(const std::string& filename)
         f.read((char*)&idx, sizeof(idx));
         if (not f) return false; // eof? happens when the file struture is wrong
 
-        auto it = patches.insert(std::make_pair(idx, COWPtr< Container >(new Container(log2dim, is_3d))) ).first;
-        it->second->alloc(cell_memory_size);
+        auto it = patches.insert(std::make_pair(idx, COWPtr< Container >(new Container(log2dim))) ).first;
+        it->second->alloc(patch_volume, cell_memory_size);
         it->second->read(f);
     }// end for
 

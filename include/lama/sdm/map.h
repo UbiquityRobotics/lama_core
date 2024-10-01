@@ -72,7 +72,7 @@ public:
     static const uint32_t MAGIC = 0x6d64732e;
 
     // Version of the binary map supported by the library.
-    static const uint16_t IO_VERSION = 0x0103;
+    static const uint16_t IO_VERSION = 0x0102;
 
     // Resolution of the map.
     double resolution;
@@ -88,8 +88,6 @@ public:
 
     // Less memory can be used when the map is used for 2d purposes.
     const bool is_3d;
-
-    const uint32_t MASK3D;
 
     // IO header
     struct IOHeader {
@@ -179,13 +177,16 @@ public:
     /**
      * Convert discrete coordinates to cell index.
      */
-    inline uint32_t m2c(const Vector3ui& coord) const
+    inline uint32_t m2c(const Vector3ui& coordinates) const
     {
         const uint32_t mask = ((1<<log2dim)-1);
-
-        return (coord(0) & mask) |
-            ((coord(1) & mask) << log2dim) |
-            ((coord(2) & mask & MASK3D) << (2*log2dim));
+        if (is_3d)
+            return ((coordinates(0) & mask) << (2*log2dim)) |
+                   ((coordinates(1) & mask) << log2dim)     |
+                   (coordinates(2) & mask);
+        else
+            return ((coordinates(0) & mask) << log2dim) |
+                   (coordinates(1) & mask);
     }
 
     /**
@@ -194,7 +195,13 @@ public:
     inline Vector3ui c2m(uint32_t idx) const
     {
         const uint32_t mask = ((1<<log2dim)-1);
-        return { idx & mask, (idx >> log2dim) & mask, (idx >> (2*log2dim)) & mask & MASK3D };
+        if (is_3d){
+            return Vector3ui((idx >> (2*log2dim)),
+                    ((idx >> log2dim) & mask),
+                    (idx & mask));
+        }
+        // else
+        return Vector3ui((idx >> log2dim), (idx & mask), 0);
     }
 
     /**
@@ -267,9 +274,7 @@ public:
     inline uint32_t cacheMiss() const
     { return cache_miss_; }
 
-    using RayCallback = std::function<void(const Vector3ui&)>;
-
-    // Compute ray and call user function for each cell the ray visits.
+    typedef std::function<void(const Vector3ui&)> RayCallback;
     void computeRay(const Vector3ui& from, const Vector3ui& to, const RayCallback& callback);
 
     void computeRay(const Vector3ui& from, const Vector3ui& to, VectorVector3ui& sink);

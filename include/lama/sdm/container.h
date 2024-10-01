@@ -35,6 +35,7 @@
 
 #include "lama/types.h"
 #include "lama/buffer_compressor.h"
+#include "lama/node_mask.h"
 
 namespace lama {
 
@@ -56,13 +57,9 @@ struct Container {
 
     // Bitmask that keeps tracking of the cells that were access.
     // This allows for faster iteration of the "known" cells.
-    uint64_t* mask = nullptr;
+    Mask mask;
 
-    const uint32_t NBITS;
-    const uint32_t SIZE;
-    const uint32_t WORD_COUNT;
-
-    Container(uint32_t log2dim, bool is3d);
+    Container(uint32_t log2dim);
     Container(const Container& other);
 
     virtual ~Container();
@@ -101,7 +98,7 @@ struct Container {
 
     inline uint8_t* get(uint32_t idx)
     {
-        if (!is_on(idx)) set_on(idx);
+        if (!mask.isOn(idx)) mask.setOn(idx);
         return (data + idx * element_size);
     }
 
@@ -118,38 +115,9 @@ struct Container {
 
     inline const uint8_t* get(uint32_t idx) const
     {
-        if (!is_on(idx)) return nullptr;
+        if (!mask.isOn(idx)) return nullptr;
         return (data + idx * element_size);
     }
-
-    // Bitmask access and manipulation.
-    // This is based on OpenVDB's NodeMasks.h
-    // https://github.com/AcademySoftwareFoundation/openvdb/blob/master/openvdb/openvdb/util/NodeMasks.h
-    bool is_on(uint32_t index) const;
-    bool set_on(uint32_t index);
-    void set_off(uint32_t index);
-
-    uint32_t find_first_on() const;
-    uint32_t find_next_on(uint32_t start) const;
-
-    uint32_t count_on() const;
-
-    // A simple iterator
-    struct Iterator {
-        uint32_t pos;
-        const Container* parent;
-
-        Iterator(uint32_t pos, const Container* parent);
-
-        Iterator& operator =(const Iterator&) = default;
-        Iterator& operator++();
-
-        uint32_t operator*() const;
-        operator bool() const;
-    };
-
-    Iterator begin_on() const;
-
 
     bool compress(BufferCompressor* bc, char* buffer);
     bool decompress(BufferCompressor* bc);

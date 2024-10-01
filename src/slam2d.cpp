@@ -109,6 +109,7 @@ lama::Slam2D::Slam2D(const Options& options)
     rot_thresh_   = options.rot_thresh;
 
     has_first_scan = false;
+    do_mapping_ = true;
     number_of_proccessed_cells_ = 0;
     truncated_ray_ = options.truncated_ray;
     truncated_range_ = options.truncated_range;
@@ -118,6 +119,8 @@ lama::Slam2D::Slam2D(const Options& options)
     if (options.create_summary)
         summary = new Summary();
 
+    // initialize covariance with high numbers
+    covar_ = Matrix3d::Identity() * 999;
 }
 
 lama::Slam2D::~Slam2D()
@@ -144,7 +147,7 @@ bool lama::Slam2D::update(const PointCloudXYZ::Ptr& surface, const Pose2D& odome
 {
     Timer timer(true);
 
-    if (not has_first_scan){
+    if (not has_first_scan and do_mapping_){
         odom_ = odometry;
         updateMaps(surface);
 
@@ -176,7 +179,10 @@ bool lama::Slam2D::update(const PointCloudXYZ::Ptr& surface, const Pose2D& odome
     Timer time_solving(true);
 
     MatchSurface2D match_surface(distance_map_, surface, pose_.state );
-    Solve(solver_options_, match_surface, 0);
+
+    MatrixXd cov;
+    Solve(solver_options_, match_surface, &cov);
+    covar_ = cov;
 
     pose_.state = match_surface.getState();
     if (summary)
@@ -184,7 +190,8 @@ bool lama::Slam2D::update(const PointCloudXYZ::Ptr& surface, const Pose2D& odome
 
     // 3. Update maps
     Timer time_mapping(true);
-    updateMaps(surface);
+    if (do_mapping_)
+        updateMaps(surface);
 
     if (summary){
         probeMTime(time_mapping.elapsed());
@@ -223,7 +230,31 @@ void lama::Slam2D::useCompression(bool compression, const std::string& algorithm
     occupancy_map_->useCompression(compression, 60, algorithm);
 }
 
-lama::Slam2D::StrategyPtr lama::Slam2D::makeStrategy(const std::string& name)
+bool lama::Slam2D::setOccupancyMap(FrequencyOccupancyMap* map)
+{
+    if (map == nullptr)
+        return false;
+
+    double l2_max = distance_map_->maxDistance();
+
+    delete occupancy_map_;
+    delete distance_map_;
+
+    occupancy_map_ = map;
+    distance_map_ = new DynamicDistanceMap(map->resolution, map->patch_length);
+    distance_map_->setMaxDistance(l2_max);
+
+    map->visit_all_cells([this, &map](auto& coords){
+        if (map->isOccupied(coords))
+            this->distance_map_->addObstacle(coords);
+    });
+
+    distance_map_->update();
+    return true;
+}
+
+
+lama::Slam2D::StrategyPtr lama::Slam2D::makeStrategy(const std::string& name, const VectorXd& parameters)
 {
     if (name == "lm"){
         return StrategyPtr(new LevenbergMarquard);

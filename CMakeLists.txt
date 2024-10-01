@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.5)
-project(iris_lama LANGUAGES CXX C)
+project(lama_core LANGUAGES CXX C)
 
 set(IRIS_LAMA_VERSION 1.3.1)
 

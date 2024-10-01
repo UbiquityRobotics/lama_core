@@ -40,9 +40,9 @@ lama::Pose3D::Pose3D()
 lama::Pose3D::Pose3D(const double& x, const double& y, const double& z,
                const double& roll, const double& pitch, const double& yaw)
 {
-    Quaterniond tmp = AngleAxisd(roll, Vector3d::UnitX()) *
+    Quaterniond tmp = AngleAxisd(roll,  Vector3d::UnitX()) *
                       AngleAxisd(pitch, Vector3d::UnitY()) *
-                      AngleAxisd(yaw, Vector3d::UnitZ());
+                      AngleAxisd(yaw,   Vector3d::UnitZ());
 
     state.translation() = Vector3d(x,y,z);
     state.setQuaternion(tmp);
@@ -68,6 +68,16 @@ lama::Pose3D::Pose3D(const Vector3d& xyz, const Vector3d& rpy)
     state.setQuaternion(tmp);
 }
 
+lama::Pose3D::Pose3D(const Vector6d& xyzrpy)
+{
+    Quaterniond tmp = AngleAxisd(xyzrpy(3), Vector3d::UnitX()) *
+                      AngleAxisd(xyzrpy(4), Vector3d::UnitY()) *
+                      AngleAxisd(xyzrpy(5), Vector3d::UnitZ());
+
+    state.translation() = xyzrpy.head<3>();
+    state.setQuaternion(tmp);
+}
+
 lama::Pose3D::Pose3D(const Matrix4d& transformation)
     : state(transformation)
 {}
@@ -90,12 +100,12 @@ lama::Pose3D::Pose3D(const SE3d& se3)
 lama::Pose3D::~Pose3D()
 {}
 
-lama::Pose3D lama::Pose3D::operator+(const Pose3D& other)
+lama::Pose3D lama::Pose3D::operator+(const Pose3D& other) const
 {
     return Pose3D(state * other.state);
 }
 
-lama::Pose3D lama::Pose3D::operator-(const Pose3D& other)
+lama::Pose3D lama::Pose3D::operator-(const Pose3D& other) const
 {
     return Pose3D(state.inverse() * other.state);
 }
