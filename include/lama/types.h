@@ -54,6 +54,9 @@ typedef Matrix<int16_t,  3, 1> Vector3s;
 typedef Matrix<uint32_t, 3, 1> Vector3ui;
 typedef Matrix<int64_t,  3, 1> Vector3l;
 typedef Matrix<uint64_t, 3, 1> Vector3ul;
+typedef Matrix<double,   6, 1> Vector6d;
+
+typedef Matrix<double, 6, 6> Matrix6d;
 
 typedef std::deque<Vector2d, aligned_allocator<Vector2d>>  VectorVector2d;
 typedef std::deque<Vector3d, aligned_allocator<Vector3d>>  VectorVector3d;
@@ -117,6 +120,19 @@ struct PointCloudXYZ {
 
     Vector3d    sensor_origin_;
     Quaterniond sensor_orientation_;
+};
+
+struct Landmark {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
+
+    // Each landmark should have a unique ID.
+    uint32_t id;
+
+    // The landmark measurement
+    Vector6d measurement;
+
+    // The measurement covariance.
+    Matrix6d covar;
 };
 
 struct PolygonMesh {

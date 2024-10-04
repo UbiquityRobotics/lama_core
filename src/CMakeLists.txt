@@ -3,8 +3,12 @@ set(lama_SOURCES
     # Base
     buffer_compressor.cpp
     graph_slam2d.cpp
+    hybrid_pf_slam2d.cpp
     image_io.cpp
+    kdtree.cpp
+    kld_sampling.cpp
     loc2d.cpp
+    landmark_pf_slam2d.cpp
     lidar_odometry_2d.cpp
     match_surface_2d.cpp
     pf_slam2d.cpp

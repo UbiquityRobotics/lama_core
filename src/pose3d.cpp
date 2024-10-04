@@ -68,6 +68,16 @@ lama::Pose3D::Pose3D(const Vector3d& xyz, const Vector3d& rpy)
     state.setQuaternion(tmp);
 }
 
+lama::Pose3D::Pose3D(const Vector6d& xyzrpy)
+{
+    Quaterniond tmp = AngleAxisd(xyzrpy(3), Vector3d::UnitX()) *
+                      AngleAxisd(xyzrpy(4), Vector3d::UnitY()) *
+                      AngleAxisd(xyzrpy(5), Vector3d::UnitZ());
+
+    state.translation() = xyzrpy.head<3>();
+    state.setQuaternion(tmp);
+}
+
 lama::Pose3D::Pose3D(const Matrix4d& transformation)
     : state(transformation)
 {}

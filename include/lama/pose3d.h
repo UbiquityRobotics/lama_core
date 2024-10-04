@@ -48,6 +48,7 @@ struct Pose3D {
            const double& roll, const double& pitch, const double& yaw);
     Pose3D(const Vector3d& xyz, const Vector3d& rpy);
     Pose3D(const Vector3d& xyz, const double& yaw);
+    Pose3D(const Vector6d& xyzrpy);
     Pose3D(const Matrix4d& transformation);
     Pose3D(const Affine3d& transformation);
     Pose3D(const Pose3D& other);
