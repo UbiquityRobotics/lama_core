@@ -43,13 +43,13 @@ add_subdirectory(../vendor/lz4      vendor/lz4)
 add_subdirectory(../vendor/minisam  vendor/minisam)
 add_subdirectory(../vendor/zstd     vendor/zstd)
 
-add_library(iris_lama ${lama_SOURCES}
+add_library(lama_core ${lama_SOURCES}
     $<TARGET_OBJECTS:lz4>
     $<TARGET_OBJECTS:minisam>
     $<TARGET_OBJECTS:zstd>
 )
 
-target_include_directories(iris_lama
+target_include_directories(lama_core
     PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
     $<INSTALL_INTERFACE:include>
@@ -63,18 +63,18 @@ target_include_directories(iris_lama
     ../vendor/zstd
 )
 
-target_compile_features(iris_lama PUBLIC cxx_std_14)
-target_compile_options(iris_lama PRIVATE -Wall -Wextra)
+target_compile_features(lama_core PUBLIC cxx_std_14)
+target_compile_options(lama_core PRIVATE -Wall -Wextra)
 
 if (${CMAKE_SYSTEM_PROCESSOR} MATCHES "arm")
-    target_compile_options(iris_lama PRIVATE -faligned-new)
+    target_compile_options(lama_core PRIVATE -faligned-new)
 endif()
 
-target_link_libraries(iris_lama PUBLIC pthread Eigen3::Eigen)
-target_include_directories(iris_lama PRIVATE extern/minisam)
+target_link_libraries(lama_core PUBLIC pthread Eigen3::Eigen)
+target_include_directories(lama_core PRIVATE extern/minisam)
 
 # libs and binaries, generate export targets
-install(TARGETS iris_lama
+install(TARGETS lama_core
   EXPORT ${CMAKE_PROJECT_NAME}Targets
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

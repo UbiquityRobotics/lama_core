@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.5)
-project(iris_lama LANGUAGES CXX C)
+project(lama_core LANGUAGES CXX C)
 
-set(IRIS_LAMA_VERSION 1.3.1)
+set(LAMA_CORE_VERSION 1.3.1)
 
 # provides default CMAKE_INSTALL_<dir> variables
 include(GNUInstallDirs)
@@ -34,7 +34,7 @@ install(EXPORT ${CMAKE_PROJECT_NAME}Targets
 # generate package version file
 write_basic_package_version_file(
   ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_PROJECT_NAME}ConfigVersion.cmake
-  VERSION ${IRIS_LAMA_VERSION}
+  VERSION ${LAMA_CORE_VERSION}
   COMPATIBILITY SameMajorVersion)
 
 # generate package configuration file
